@@ -190,6 +190,8 @@ async def back(callback: types.CallbackQuery):
     await list_clients(callback.message)
 
 async def main():
+    # Bot o'chiq bo'lgan vaqtdagi xabarlarni e'tiborsiz qoldirish uchun (skip_updates=True)
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
