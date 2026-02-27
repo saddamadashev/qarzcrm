@@ -17,7 +17,7 @@ from aiogram.types import (
 # Logging sozlamalari
 logging.basicConfig(level=logging.INFO)
 
-TOKEN = "7968516598:AAHRE5zJ19D0_755S3y_6-uGjW5fT0E89_M"
+TOKEN = 8759158410:AAGe6x_czTvux5QZSSuauZXdwF5QaBJhYEY
 ADMIN_ID = 565876427  # O'zingizni ID raqamingizni yozing
 
 bot = Bot(token=TOKEN)
