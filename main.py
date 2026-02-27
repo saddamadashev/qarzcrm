@@ -235,13 +235,71 @@ async def client_selector(message: types.Message):
             await db.execute("UPDATE bot_users SET current_client_id = $1 WHERE user_id = $2", row['id'], message.from_user.id)
             await message.answer(f"✅ **{row['name']}** tanlandi. Amaliyotni tanlang:", reply_markup=get_client_menu(), parse_mode="Markdown")
 
+# --- BAZA BILAN ISHLASH (Mana shu qismini to'liq almashtiring) ---
+async def init_db():
+    global conn_pool
+    db_url = os.getenv("DATABASE_URL")
+    
+    if not db_url:
+        logging.error("DATABASE_URL topilmadi! Railway Variables-ni tekshiring.")
+        return
+
+    # Ba'zi platformalarda 'postgres://' bo'ladi, asyncpg faqat 'postgresql://' ni tushunadi
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    try:
+        # Ulanish hovuzini yaratish
+        conn_pool = await asyncpg.create_pool(
+            db_url, 
+            min_size=1, 
+            max_size=10,
+            command_timeout=60
+        )
+        
+        async with conn_pool.acquire() as db:
+            # Jadvallarni yaratish
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS bot_users(
+                user_id BIGINT PRIMARY KEY,
+                current_client_id INTEGER
+            )
+            """)
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS clients(
+                id SERIAL PRIMARY KEY,
+                owner_id BIGINT,
+                name TEXT,
+                UNIQUE(owner_id, name)
+            )
+            """)
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS operations(
+                id SERIAL PRIMARY KEY,
+                client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+                amount FLOAT,
+                op_type TEXT,
+                created_at TIMESTAMP
+            )
+            """)
+        logging.info("✅ Ma'lumotlar bazasi muvaffaqiyatli ulandi!")
+    except Exception as e:
+        logging.error(f"❌ Baza bilan ulanishda xato: {e}")
+
+# --- BOTNI ISHGA TUSHIRISH ---
 async def main():
+    # 1. Avval bazani yoqamiz
     await init_db()
+    
+    # 2. Eski xabarlarni (updates) tozalaymiz
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    # 3. Pollingni boshlaymiz
+    logging.info("🚀 Bot ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        pass
+        logging.info("Bot to'xtatildi")
