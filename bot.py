@@ -14,7 +14,7 @@ dp = Dispatcher()
 pool = None
 
 
-# ========== DATABASE INIT ==========
+# ========== DB ==========
 async def init_db():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL)
@@ -29,7 +29,7 @@ async def init_db():
         """)
 
 
-# ========== ADMIN CHECK ==========
+# ========== ADMIN ==========
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -45,6 +45,8 @@ menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+current_action = {}
+
 
 # ========== START ==========
 @dp.message(Command("start"))
@@ -56,63 +58,25 @@ async def start(message: Message):
     await message.answer("Qarz CRM tizimi 🚀", reply_markup=menu)
 
 
-# ========== ADD DEBT ==========
+# ========== BUTTONS ==========
 @dp.message(F.text == "➕ Qarz qo‘shish")
-async def add_debt_prompt(message: Message):
+async def add_prompt(message: Message):
+    current_action[message.from_user.id] = "add"
     await message.answer("Format: Ism Summa\nMasalan:\nAli 500000")
 
 
-@dp.message()
-async def handle_messages(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    text = message.text.split()
-
-    if len(text) == 2:
-        name = text[0]
-        amount = float(text[1])
-
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO debts(name, amount) VALUES($1,$2)",
-                name, amount
-            )
-
-        await message.answer("✅ Qarz qo‘shildi")
-    else:
-        await message.answer("Noto‘g‘ri format")
-
-
-# ========== PAY ==========
 @dp.message(F.text == "➖ To‘lov qilish")
 async def pay_prompt(message: Message):
-    await message.answer("Format: Ism Summa\nMasalan:\nAli -200000")
+    current_action[message.from_user.id] = "pay"
+    await message.answer("Format: Ism Summa\nMasalan:\nAli 200000")
 
 
-# ========== CHECK ==========
 @dp.message(F.text == "📊 Tekshirish")
 async def check_prompt(message: Message):
+    current_action[message.from_user.id] = "check"
     await message.answer("Ismni kiriting")
 
 
-@dp.message()
-async def check_debt(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    name = message.text
-
-    async with pool.acquire() as conn:
-        total = await conn.fetchval(
-            "SELECT COALESCE(SUM(amount),0) FROM debts WHERE name=$1",
-            name
-        )
-
-    await message.answer(f"{name} jami qarzi: {total} so‘m")
-
-
-# ========== LIST ==========
 @dp.message(F.text == "📢 Qarzdorlar")
 async def list_debtors(message: Message):
     if not is_admin(message.from_user.id):
@@ -135,6 +99,49 @@ async def list_debtors(message: Message):
         text += f"{row['name']} - {row['total']} so‘m\n"
 
     await message.answer(text)
+
+
+# ========== TEXT HANDLER ==========
+@dp.message()
+async def handle_input(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    action = current_action.get(message.from_user.id)
+
+    if not action:
+        return
+
+    if action in ["add", "pay"]:
+        try:
+            name, amount = message.text.split()
+            amount = float(amount)
+
+            if action == "pay":
+                amount = -amount
+
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO debts(name, amount) VALUES($1,$2)",
+                    name, amount
+                )
+
+            await message.answer("✅ Amal bajarildi")
+        except:
+            await message.answer("Format xato")
+
+    elif action == "check":
+        name = message.text
+
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT COALESCE(SUM(amount),0) FROM debts WHERE name=$1",
+                name
+            )
+
+        await message.answer(f"{name} jami qarzi: {total} so‘m")
+
+    current_action[message.from_user.id] = None
 
 
 # ========== MAIN ==========
