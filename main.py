@@ -11,6 +11,7 @@ from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
 # --- SOZLAMALAR ---
+# Railway-da BOT_TOKEN va DATABASE_URL ni Variable-ga qo'shgan bo'lishingiz shart
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8759158410:AAFH4Lz-1VsndTC4VRABU7uHYU-qCFoY60Q")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -18,66 +19,72 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-db = None
-state = {}  # Faqat qisqa muddatli holatlar uchun
 tz = pytz.timezone("Asia/Tashkent")
+state_data = {} # Vaqtinchalik holat uchun
 
 # --- YORDAMCHI FUNKSIYALAR ---
 def format_num(num):
+    """Raqamlarni 5 000 000 ko'rinishida formatlash"""
     try:
         return "{:,.0f}".format(num).replace(",", " ")
     except:
         return "0"
 
 def parse_num(text):
+    """Matndan faqat sonlarni ajratib olish (probel yoki $ bo'lsa ham)"""
     clean_text = re.sub(r'[^\d]', '', text)
     return float(clean_text) if clean_text else 0
 
-# --- BAZA BILAN ISHLASH ---
+# --- BAZA BILAN ISHLASH (PostgreSQL) ---
 async def init_db():
-    global db
-    db = await asyncpg.connect(DATABASE_URL)
+    global conn_pool
+    conn_pool = await asyncpg.create_pool(DATABASE_URL)
     
-    # Foydalanuvchilar va ularning hozirgi tanlagan mijozi
-    await db.execute("""
-    CREATE TABLE IF NOT EXISTS users(
-        user_id BIGINT PRIMARY KEY,
-        selected_client_id INTEGER
-    )
-    """)
-    
-    await db.execute("""
-    CREATE TABLE IF NOT EXISTS clients(
-        id SERIAL PRIMARY KEY,
-        name TEXT UNIQUE
-    )
-    """)
-    
-    await db.execute("""
-    CREATE TABLE IF NOT EXISTS debts(
-        id SERIAL PRIMARY KEY,
-        client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
-        amount FLOAT,
-        type TEXT,
-        created TIMESTAMP
-    )
-    """)
+    async with conn_pool.acquire() as db:
+        # Foydalanuvchi qaysi mijoz ustida ishlayotganini saqlash
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS bot_users(
+            user_id BIGINT PRIMARY KEY,
+            current_client_id INTEGER
+        )
+        """)
+        
+        # Mijozlar jadvali
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS clients(
+            id SERIAL PRIMARY KEY,
+            owner_id BIGINT,
+            name TEXT,
+            UNIQUE(owner_id, name)
+        )
+        """)
+        
+        # Qarzlar va To'lovlar (Xotira o'chmaydi)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS operations(
+            id SERIAL PRIMARY KEY,
+            client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+            amount FLOAT,
+            op_type TEXT, -- 'plus' yoki 'minus'
+            created_at TIMESTAMP
+        )
+        """)
 
 # --- KLAVIATURALAR ---
-def main_menu():
+def get_main_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Mijoz qo'shish"), KeyboardButton(text="👥 Mijozlar")],
-            [KeyboardButton(text="📊 Umumiy Statistika")]
+            [KeyboardButton(text="👥 Mijozlarim"), KeyboardButton(text="➕ Mijoz qo'shish")],
+            [KeyboardButton(text="📊 Umumiy hisobot")]
         ],
         resize_keyboard=True
     )
 
-def client_menu():
+def get_client_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Qarz qo'shish"), KeyboardButton(text="➖ Qarz ayirish")],
-            [KeyboardButton(text="💰 Balansni ko'rish"), KeyboardButton(text="📜 Tarix")],
+            [KeyboardButton(text="➕ Qarz yozish"), KeyboardButton(text="➖ To'lov olish")],
+            [KeyboardButton(text="💰 Balans"), KeyboardButton(text="📜 Tarix")],
             [KeyboardButton(text="⬅️ Orqaga")]
         ],
         resize_keyboard=True
@@ -86,117 +93,147 @@ def client_menu():
 # --- HANDLERLAR ---
 
 @dp.message(Command("start"))
-async def start(message: types.Message):
-    await db.execute("INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING", message.from_user.id)
-    await message.answer("🏦 Qarz CRM tizimiga xush kelibsiz!", reply_markup=main_menu())
+async def cmd_start(message: types.Message):
+    async with conn_pool.acquire() as db:
+        await db.execute("INSERT INTO bot_users(user_id) VALUES($1) ON CONFLICT DO NOTHING", message.from_user.id)
+    await message.answer("🚀 **Super Qarz CRM tizimiga xush kelibsiz!**", reply_markup=get_main_menu(), parse_mode="Markdown")
 
 @dp.message(F.text == "➕ Mijoz qo'shish")
-async def add_client(message: types.Message):
-    state[message.from_user.id] = "add_client"
-    await message.answer("👤 Yangi mijoz ismini yozing:", reply_markup=ReplyKeyboardRemove())
+async def start_add_client(message: types.Message):
+    state_data[message.from_user.id] = "waiting_client_name"
+    await message.answer("👤 **Yangi mijoz ismini kiriting:**", reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
 
-@dp.message(lambda m: state.get(m.from_user.id) == "add_client")
-async def save_client(message: types.Message):
-    try:
-        if message.text == "⬅️ Orqaga":
-            state.pop(message.from_user.id, None)
-            return await message.answer("Bekor qilindi", reply_markup=main_menu())
-            
-        await db.execute("INSERT INTO clients(name) VALUES($1)", message.text)
-        await message.answer(f"✅ {message.text} qo'shildi.", reply_markup=main_menu())
-    except asyncpg.UniqueViolationError:
-        await message.answer("❌ Bu mijoz bazada bor.")
-    state.pop(message.from_user.id, None)
-
-@dp.message(F.text == "👥 Mijozlar")
-async def list_clients(message: types.Message):
-    rows = await db.fetch("SELECT * FROM clients ORDER BY name")
-    if not rows:
-        return await message.answer("Mijozlar yo'q.")
-    kb = [[KeyboardButton(text=r["name"])] for r in rows]
-    kb.append([KeyboardButton(text="⬅️ Orqaga")])
-    await message.answer("Mijozni tanlang:", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-
-@dp.message(F.text == "⬅️ Orqaga")
-async def go_back(message: types.Message):
-    await db.execute("UPDATE users SET selected_client_id = NULL WHERE user_id = $1", message.from_user.id)
-    await message.answer("Asosiy menu", reply_markup=main_menu())
-
-# MIJOZNI TANLASH LOGIKASI
-@dp.message(lambda m: m.text not in ["➕ Mijoz qo'shish", "👥 Mijozlar", "📊 Umumiy Statistika", "➕ Qarz qo'shish", "➖ Qarz ayirish", "💰 Balansni ko'rish", "📜 Tarix", "⬅️ Orqaga"])
-async def select_client(message: types.Message):
-    row = await db.fetchrow("SELECT id, name FROM clients WHERE name=$1", message.text)
-    if row:
-        await db.execute("UPDATE users SET selected_client_id = $1 WHERE user_id = $2", row['id'], message.from_user.id)
-        await message.answer(f"👤 Mijoz: **{row['name']}** tanlandi.", reply_markup=client_menu(), parse_mode="Markdown")
-
-# QARZ VA TO'LOV AMALLARI
-@dp.message(F.text.in_(["➕ Qarz qo'shish", "➖ Qarz ayirish"]))
-async def ask_amount(message: types.Message):
-    # Tekshirish: Mijoz tanlanganmi?
-    selected = await db.fetchval("SELECT selected_client_id FROM users WHERE user_id = $1", message.from_user.id)
-    if not selected:
-        return await message.answer("Avval mijozni tanlang!", reply_markup=main_menu())
-        
-    state[message.from_user.id] = "add_debt" if message.text == "➕ Qarz qo'shish" else "minus_debt"
-    await message.answer("💰 Summani kiriting:", reply_markup=ReplyKeyboardRemove())
-
-@dp.message(lambda m: state.get(m.from_user.id) in ["add_debt", "minus_debt"])
-async def save_transaction(message: types.Message):
+@dp.message(lambda m: state_data.get(m.from_user.id) == "waiting_client_name")
+async def save_new_client(message: types.Message):
     user_id = message.from_user.id
-    mode = state[user_id]
+    name = message.text.strip()
+    
+    async with conn_pool.acquire() as db:
+        try:
+            await db.execute("INSERT INTO clients(owner_id, name) VALUES($1, $2)", user_id, name)
+            await message.answer(f"✅ **{name}** ro'yxatga olindi!", reply_markup=get_main_menu(), parse_mode="Markdown")
+        except asyncpg.UniqueViolationError:
+            await message.answer("❌ Bu ismdagi mijoz sizda allaqachon bor.")
+    state_data.pop(user_id, None)
+
+@dp.message(F.text == "👥 Mijozlarim")
+async def show_clients(message: types.Message):
+    async with conn_pool.acquire() as db:
+        rows = await db.fetch("SELECT name FROM clients WHERE owner_id=$1 ORDER BY name", message.from_user.id)
+    
+    if not rows:
+        return await message.answer("📭 Mijozlar ro'yxati bo'sh.")
+    
+    kb = [[KeyboardButton(text=r['name'])] for r in rows]
+    kb.append([KeyboardButton(text="⬅️ Bosh menyu")])
+    await message.answer("👇 **Mijozni tanlang:**", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True), parse_mode="Markdown")
+
+@dp.message(F.text == "⬅️ Bosh menyu")
+@dp.message(F.text == "⬅️ Orqaga")
+async def back_to_home(message: types.Message):
+    async with conn_pool.acquire() as db:
+        await db.execute("UPDATE bot_users SET current_client_id = NULL WHERE user_id = $1", message.from_user.id)
+    await message.answer("🏠 **Asosiy menyu**", reply_markup=get_main_menu(), parse_mode="Markdown")
+
+# --- AMALIYOTLAR (Mijoz ichidagi funksiyalar) ---
+
+@dp.message(F.text.in_(["➕ Qarz yozish", "➖ To'lov olish"]))
+async def ask_amount(message: types.Message):
+    async with conn_pool.acquire() as db:
+        curr_id = await db.fetchval("SELECT current_client_id FROM bot_users WHERE user_id = $1", message.from_user.id)
+    
+    if not curr_id:
+        return await message.answer("⚠️ Avval mijozni tanlang!")
+
+    state_data[message.from_user.id] = "plus" if "➕" in message.text else "minus"
+    await message.answer("💰 **Summani kiriting:**\n_(Masalan: 2 500 000)_", reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+
+@dp.message(lambda m: state_data.get(m.from_user.id) in ["plus", "minus"])
+async def process_op(message: types.Message):
+    user_id = message.from_user.id
+    mode = state_data[user_id]
     amount = parse_num(message.text)
     
     if amount <= 0:
-        return await message.answer("❌ Faqat raqam kiriting!")
+        return await message.answer("❌ Xato! Iltimos, faqat raqam kiriting.")
 
-    client_id = await db.fetchval("SELECT selected_client_id FROM users WHERE user_id = $1", user_id)
-    type_label = "add" if mode == "add_debt" else "minus"
-    now = datetime.now(tz)
+    async with conn_pool.acquire() as db:
+        client_id = await db.fetchval("SELECT current_client_id FROM bot_users WHERE user_id = $1", user_id)
+        now = datetime.now(tz)
+        
+        # Amaliyotni saqlash
+        await db.execute("INSERT INTO operations(client_id, amount, op_type, created_at) VALUES($1, $2, $3, $4)", 
+                         client_id, amount, mode, now)
+        
+        # Yangi hisob-kitob
+        client_info = await db.fetchrow("SELECT name FROM clients WHERE id=$1", client_id)
+        total_plus = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM operations WHERE client_id=$1 AND op_type='plus'", client_id)
+        total_minus = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM operations WHERE client_id=$1 AND op_type='minus'", client_id)
+        balance = total_plus - total_minus
 
-    await db.execute("INSERT INTO debts(client_id, amount, type, created) VALUES($1, $2, $3, $4)", client_id, amount, type_label, now)
-
-    # Ma'lumotlarni olish
-    client_name = await db.fetchval("SELECT name FROM clients WHERE id=$1", client_id)
-    total_add = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='add'", client_id)
-    total_minus = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='minus'", client_id)
-    
-    state.pop(user_id, None)
+    # CHIROYLI CHEK
+    status = "Qarz qo'shildi ➕" if mode == "plus" else "To'lov qilindi ✅"
     receipt = (
-        f"🧾 **AMALIYOT BAJARILDI**\n━━━━━━━━━━━━━━━\n"
-        f"👤 Mijoz: **{client_name}**\n"
-        f"🕒 Sana: `{now.strftime('%d.%m.%Y | %H:%M')}`\n━━━━━━━━━━━━━━━\n"
-        f"{'➕' if type_label == 'add' else '➖'} Miqdor: `{format_num(amount)}` so'm\n"
-        f"📉 Qoldiq: **{format_num(total_add - total_minus)}** so'm"
+        f"📋 **AMALIYOT CHEKI**\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👤 Mijoz: **{client_info['name']}**\n"
+        f"📅 Sana: `{now.strftime('%d.%m.%Y')}`\n"
+        f"⏰ Vaqt: `{now.strftime('%H:%M:%S')}`\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💰 Miqdor: `{format_num(amount)}` so'm\n"
+        f"📝 Holat: {status}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📉 Qoldiq: **{format_num(balance)}** so'm"
     )
-    await message.answer(receipt, reply_markup=client_menu(), parse_mode="Markdown")
-
-@dp.message(F.text == "💰 Balansni ko'rish")
-async def show_balance(message: types.Message):
-    client_id = await db.fetchval("SELECT selected_client_id FROM users WHERE user_id = $1", message.from_user.id)
-    if not client_id: return await message.answer("Mijoz tanlanmagan!")
     
-    add = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='add'", client_id)
-    minus = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='minus'", client_id)
-    await message.answer(f"💰 Joriy qarz: **{format_num(add-minus)}** so'm", parse_mode="Markdown")
+    state_data.pop(user_id, None)
+    await message.answer(receipt, reply_markup=get_client_menu(), parse_mode="Markdown")
+
+@dp.message(F.text == "💰 Balans")
+async def check_balance(message: types.Message):
+    async with conn_pool.acquire() as db:
+        c_id = await db.fetchval("SELECT current_client_id FROM bot_users WHERE user_id = $1", message.from_user.id)
+        if not c_id: return
+        
+        plus = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM operations WHERE client_id=$1 AND op_type='plus'", c_id)
+        minus = await db.fetchval("SELECT COALESCE(SUM(amount),0) FROM operations WHERE client_id=$1 AND op_type='minus'", c_id)
+        name = await db.fetchval("SELECT name FROM clients WHERE id=$1", c_id)
+        
+    await message.answer(f"👤 Mijoz: **{name}**\n💰 Joriy qarz: **{format_num(plus-minus)}** so'm", parse_mode="Markdown")
 
 @dp.message(F.text == "📜 Tarix")
 async def show_history(message: types.Message):
-    client_id = await db.fetchval("SELECT selected_client_id FROM users WHERE user_id = $1", message.from_user.id)
-    rows = await db.fetch("SELECT * FROM debts WHERE client_id=$1 ORDER BY created DESC LIMIT 10", client_id)
+    async with conn_pool.acquire() as db:
+        c_id = await db.fetchval("SELECT current_client_id FROM bot_users WHERE user_id = $1", message.from_user.id)
+        rows = await db.fetch("SELECT * FROM operations WHERE client_id=$1 ORDER BY created_at DESC LIMIT 10", c_id)
     
-    if not rows: return await message.answer("Tarix bo'sh.")
+    if not rows: return await message.answer("Tarix mavjud emas.")
     
-    res = "📜 **OXIRGI 10 TA AMALIYOT:**\n\n"
+    res = "📜 **SO'NGGI 10 TA AMALIYOT:**\n\n"
     for r in rows:
-        s = "➕" if r['type'] == 'add' else "➖"
-        res += f"`{r['created'].strftime('%d.%m %H:%M')}` | {s} `{format_num(r['amount'])}` so'm\n"
+        sign = "➕" if r['op_type'] == 'plus' else "➖"
+        res += f"`{r['created_at'].strftime('%d.%m %H:%M')}` | {sign} `{format_num(r['amount'])}` so'm\n"
     await message.answer(res, parse_mode="Markdown")
 
-@dp.message(F.text == "📊 Umumiy Statistika")
-async def global_stats(message: types.Message):
-    total = await db.fetchval("SELECT SUM(CASE WHEN type='add' THEN amount ELSE -amount END) FROM debts")
-    await message.answer(f"📊 **JAMI HAQDORLIK:**\n\n💰 **{format_num(total or 0)}** so'm", parse_mode="Markdown")
+@dp.message(F.text == "📊 Umumiy hisobot")
+async def total_stats(message: types.Message):
+    async with conn_pool.acquire() as db:
+        total = await db.fetchval("""
+            SELECT SUM(CASE WHEN op_type='plus' THEN amount ELSE -amount END) 
+            FROM operations o JOIN clients c ON o.client_id = c.id 
+            WHERE c.owner_id = $1
+        """, message.from_user.id)
+        
+    await message.answer(f"📊 **SIZNING UMUMIY HAQDORLIGINGIZ:**\n\n💰 **{format_num(total or 0)}** so'm", parse_mode="Markdown")
+
+# --- MIJOZNI TANLASH (Eng oxirgi handler bo'lishi kerak) ---
+@dp.message()
+async def client_selector(message: types.Message):
+    async with conn_pool.acquire() as db:
+        row = await db.fetchrow("SELECT id, name FROM clients WHERE owner_id=$1 AND name=$2", message.from_user.id, message.text)
+        if row:
+            await db.execute("UPDATE bot_users SET current_client_id = $1 WHERE user_id = $2", row['id'], message.from_user.id)
+            await message.answer(f"✅ **{row['name']}** tanlandi. Amaliyotni tanlang:", reply_markup=get_client_menu(), parse_mode="Markdown")
 
 async def main():
     await init_db()
@@ -204,4 +241,7 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass
