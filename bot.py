@@ -10,12 +10,12 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 db = None
-user_states = {}
-selected_client = {}
+state = {}
+current_client = {}
 
 async def init_db():
     global db
@@ -34,25 +34,31 @@ async def init_db():
         client_id INTEGER,
         amount FLOAT,
         type TEXT,
-        date TIMESTAMP
+        created TIMESTAMP
     )
     """)
 
 def main_menu():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(KeyboardButton(text="➕ Mijoz qo'shish"))
-    kb.add(KeyboardButton(text="👥 Mijozlar"))
-    kb.add(KeyboardButton(text="📊 Statistika"))
-    return kb
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Mijoz qo'shish")],
+            [KeyboardButton(text="👥 Mijozlar")],
+            [KeyboardButton(text="📊 Statistika")]
+        ],
+        resize_keyboard=True
+    )
 
 def client_menu():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(KeyboardButton(text="➕ Qarz qo'shish"))
-    kb.add(KeyboardButton(text="➖ Qarz ayirish"))
-    kb.add(KeyboardButton(text="💰 Umumiy qarz"))
-    kb.add(KeyboardButton(text="📜 Tarix"))
-    kb.add(KeyboardButton(text="⬅️ Orqaga"))
-    return kb
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Qarz qo'shish")],
+            [KeyboardButton(text="➖ Qarz ayirish")],
+            [KeyboardButton(text="💰 Umumiy qarz")],
+            [KeyboardButton(text="📜 Tarix")],
+            [KeyboardButton(text="⬅️ Orqaga")]
+        ],
+        resize_keyboard=True
+    )
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -60,13 +66,19 @@ async def start(message: types.Message):
 
 @dp.message(lambda m: m.text == "➕ Mijoz qo'shish")
 async def add_client(message: types.Message):
-    user_states[message.from_user.id] = "add_client"
-    await message.answer("Mijoz ismini yuboring")
+    state[message.from_user.id] = "add_client"
+    await message.answer("Mijoz ismini yozing")
 
-@dp.message(lambda m: user_states.get(m.from_user.id) == "add_client")
+@dp.message(lambda m: state.get(m.from_user.id) == "add_client")
 async def save_client(message: types.Message):
-    await db.execute("INSERT INTO clients(name) VALUES($1)", message.text)
-    user_states.pop(message.from_user.id)
+
+    await db.execute(
+        "INSERT INTO clients(name) VALUES($1)",
+        message.text
+    )
+
+    state.pop(message.from_user.id)
+
     await message.answer("Mijoz qo'shildi", reply_markup=main_menu())
 
 @dp.message(lambda m: m.text == "👥 Mijozlar")
@@ -74,14 +86,20 @@ async def clients(message: types.Message):
 
     rows = await db.fetch("SELECT * FROM clients")
 
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard = []
 
     for r in rows:
-        kb.add(KeyboardButton(text=r["name"]))
+        keyboard.append([KeyboardButton(text=r["name"])])
 
-    kb.add(KeyboardButton(text="⬅️ Orqaga"))
+    keyboard.append([KeyboardButton(text="⬅️ Orqaga")])
 
-    await message.answer("Mijozlar", reply_markup=kb)
+    await message.answer(
+        "Mijozlar",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=keyboard,
+            resize_keyboard=True
+        )
+    )
 
 @dp.message(lambda m: m.text == "⬅️ Orqaga")
 async def back(message: types.Message):
@@ -96,7 +114,8 @@ async def client_select(message: types.Message):
     )
 
     if row:
-        selected_client[message.from_user.id] = row["id"]
+
+        current_client[message.from_user.id] = row["id"]
 
         await message.answer(
             f"{row['name']} tanlandi",
@@ -104,79 +123,79 @@ async def client_select(message: types.Message):
         )
 
 @dp.message(lambda m: m.text == "➕ Qarz qo'shish")
-async def debt_add(message: types.Message):
+async def add_debt(message: types.Message):
 
-    user_states[message.from_user.id] = "add_debt"
-    await message.answer("Qarz summasini yuboring")
+    state[message.from_user.id] = "add_debt"
+
+    await message.answer("Qarz summasini yozing")
 
 @dp.message(lambda m: m.text == "➖ Qarz ayirish")
-async def debt_minus(message: types.Message):
+async def minus_debt(message: types.Message):
 
-    user_states[message.from_user.id] = "minus_debt"
-    await message.answer("Qaytarilgan summani yuboring")
+    state[message.from_user.id] = "minus_debt"
 
-@dp.message(lambda m: user_states.get(m.from_user.id) == "add_debt")
+    await message.answer("To'langan summani yozing")
+
+@dp.message(lambda m: state.get(m.from_user.id) == "add_debt")
 async def save_debt(message: types.Message):
 
     amount = float(message.text)
-    client = selected_client.get(message.from_user.id)
+    client_id = current_client.get(message.from_user.id)
 
-    await db.execute("""
-    INSERT INTO debts(client_id,amount,type,date)
-    VALUES($1,$2,'add',$3)
-    """, client, amount, datetime.now())
+    await db.execute(
+        "INSERT INTO debts(client_id,amount,type,created) VALUES($1,$2,'add',$3)",
+        client_id,
+        amount,
+        datetime.now()
+    )
 
-    user_states.pop(message.from_user.id)
+    state.pop(message.from_user.id)
 
     await message.answer("Qarz qo'shildi")
 
-@dp.message(lambda m: user_states.get(m.from_user.id) == "minus_debt")
-async def minus_debt(message: types.Message):
+@dp.message(lambda m: state.get(m.from_user.id) == "minus_debt")
+async def save_minus(message: types.Message):
 
     amount = float(message.text)
-    client = selected_client.get(message.from_user.id)
+    client_id = current_client.get(message.from_user.id)
 
-    await db.execute("""
-    INSERT INTO debts(client_id,amount,type,date)
-    VALUES($1,$2,'minus',$3)
-    """, client, amount, datetime.now())
+    await db.execute(
+        "INSERT INTO debts(client_id,amount,type,created) VALUES($1,$2,'minus',$3)",
+        client_id,
+        amount,
+        datetime.now()
+    )
 
-    user_states.pop(message.from_user.id)
+    state.pop(message.from_user.id)
 
     await message.answer("Qarz kamaytirildi")
 
 @dp.message(lambda m: m.text == "💰 Umumiy qarz")
-async def total_debt(message: types.Message):
+async def total(message: types.Message):
 
-    client = selected_client.get(message.from_user.id)
+    client_id = current_client.get(message.from_user.id)
 
-    add = await db.fetchval("""
-    SELECT COALESCE(SUM(amount),0)
-    FROM debts
-    WHERE client_id=$1 AND type='add'
-    """, client)
+    add = await db.fetchval(
+        "SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='add'",
+        client_id
+    )
 
-    minus = await db.fetchval("""
-    SELECT COALESCE(SUM(amount),0)
-    FROM debts
-    WHERE client_id=$1 AND type='minus'
-    """, client)
+    minus = await db.fetchval(
+        "SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='minus'",
+        client_id
+    )
 
-    total = add - minus
-
-    await message.answer(f"Umumiy qarz: {total}")
+    await message.answer(f"Umumiy qarz: {add-minus}")
 
 @dp.message(lambda m: m.text == "📜 Tarix")
 async def history(message: types.Message):
 
-    client = selected_client.get(message.from_user.id)
+    client_id = current_client.get(message.from_user.id)
 
-    rows = await db.fetch("""
-    SELECT * FROM debts
-    WHERE client_id=$1
-    ORDER BY date DESC
-    LIMIT 10
-    """, client)
+    rows = await db.fetch(
+        "SELECT * FROM debts WHERE client_id=$1 ORDER BY created DESC LIMIT 10",
+        client_id
+    )
 
     text = ""
 
@@ -184,7 +203,7 @@ async def history(message: types.Message):
 
         sign = "➕" if r["type"] == "add" else "➖"
 
-        text += f"{r['date']} {sign} {r['amount']}\n"
+        text += f"{r['created']} {sign} {r['amount']}\n"
 
     if text == "":
         text = "Tarix yo'q"
