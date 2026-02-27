@@ -1,6 +1,0 @@
-import sqlite3
-conn = sqlite3.connect('debts.db') # Agar fayl nomi boshqa bo'lsa, o'shani yozing
-c = conn.cursor()
-c.execute("SELECT name FROM sqlite_master WHERE type='table';")
-print("Bazada bor jadvallar:", c.fetchall())
-conn.close()
