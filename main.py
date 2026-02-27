@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 
 # --- SOZLAMALAR ---
 TOKEN = "7968516598:AAHRE5zJ19D0_755S3y_6-uGjW5fT0E89_M"
-ADMIN_ID = 12345678  # O'zingizning ID-ingizni bu yerga yozing!
+ADMIN_ID = 565876427  # O'zingizning ID-ingizni bu yerga yozing!
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
