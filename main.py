@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 import os
+import re
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -10,28 +11,28 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 
 # --- SOZLAMALAR ---
 TOKEN = os.getenv("BOT_TOKEN", "7968516598:AAHRE5zJ19D0_755S3y_6-uGjW5fT0E89_M")
-ADMIN_ID = 12345678  
-
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- YORDAMCHI FUNKSIYALAR ---
+# --- YORDAMCHI FUNKSIYALAR (IDEAL FORMATLASH) ---
 def get_uzb_time():
     return datetime.utcnow() + timedelta(hours=5)
 
 def format_num(num):
-    """Raqamlarni 1 000 000 ko'rinishida formatlaydi"""
-    return "{:,.0f}".format(num).replace(",", " ")
+    """Raqamni 1 000 000.00 ko'rinishidan 1 000 000 ko'rinishiga o'tkazadi"""
+    try:
+        # f-string orqali mingliklarni ajratamiz (1,000,000) keyin vergulni bo'sh joyga almashtiramiz
+        return f"{int(num):,}".replace(",", " ")
+    except:
+        return "0"
 
 def parse_num(text):
-    """Matndan faqat raqamlarni ajratib oladi (bo'sh joy va $ belgisini olib tashlaydi)"""
-    # $ va bo'sh joylarni olib tashlaymiz
-    clean_text = text.replace("$", "").replace(" ", "").strip()
-    # Faqat raqamlardan iboratligini tekshiramiz
-    digits_only = ''.join(filter(str.isdigit, clean_text))
-    return float(digits_only) if digits_only else 0
+    """Matndan faqat sonlarni sug'urib oladi (nuqta, vergul, bo'sh joy va $ ni tozalaydi)"""
+    # Faqat raqamlarni qoldirish (masalan: "1 200 000 $" -> "1200000")
+    clean_text = re.sub(r'[^\d]', '', text)
+    return float(clean_text) if clean_text else 0
 
-# --- BAZA BILAN ISHLASH ---
+# --- BAZA ---
 def init_db():
     conn = sqlite3.connect('debts.db')
     c = conn.cursor()
@@ -49,19 +50,15 @@ class Form(StatesGroup):
     adding_client = State()
     amount_input = State()
 
-# --- KLAVIATURALAR ---
-def main_menu(user_id):
+# --- MENU ---
+def main_menu():
     kb = [
-        [KeyboardButton(text="👥 Mijozlarim"), KeyboardButton(text="🔍 Qidirish")],
-        [KeyboardButton(text="➕ Mijoz qo'shish"), KeyboardButton(text="📊 Statistika")],
-        [KeyboardButton(text="⚠️ Muddat o'tganlar")]
+        [KeyboardButton(text="👥 Mijozlarim"), KeyboardButton(text="📊 Statistika")],
+        [KeyboardButton(text="➕ Mijoz qo'shish")]
     ]
-    if user_id == ADMIN_ID:
-        kb.append([KeyboardButton(text="👑 Admin Panel")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 # --- HANDLERLAR ---
-
 @dp.message(Command("start"))
 async def start(message: types.Message):
     conn = sqlite3.connect('debts.db')
@@ -69,37 +66,29 @@ async def start(message: types.Message):
     c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
     conn.commit()
     conn.close()
-    await message.answer("🚀 **Buxgalteriya tizimiga xush kelibsiz!**", reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
+    await message.answer("💰 **Qarz daftari botiga xush kelibsiz!**", reply_markup=main_menu(), parse_mode="Markdown")
 
 @dp.message(F.text == "➕ Mijoz qo'shish")
-async def add_client_start(message: types.Message, state: FSMContext):
-    await message.answer("👤 **Mijoz ismini kiriting:**", 
-                         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="⬅️ Bekor qilish")]], resize_keyboard=True),
-                         parse_mode="Markdown")
+async def add_client(message: types.Message, state: FSMContext):
+    await message.answer("👤 **Mijoz ismini kiriting:**", parse_mode="Markdown")
     await state.set_state(Form.adding_client)
 
 @dp.message(Form.adding_client)
-async def client_named(message: types.Message, state: FSMContext):
-    if message.text == "⬅️ Bekor qilish":
-        await state.clear()
-        await message.answer("Bekor qilindi.", reply_markup=main_menu(message.from_user.id))
-        return
-    
+async def save_client(message: types.Message, state: FSMContext):
     now = get_uzb_time().strftime("%Y-%m-%d")
     conn = sqlite3.connect('debts.db')
     c = conn.cursor()
     c.execute("INSERT INTO clients (owner_id, name, last_update) VALUES (?, ?, ?)", (message.from_user.id, message.text, now))
     conn.commit()
     conn.close()
-    await message.answer(f"✅ **{message.text}** muvaffaqiyatli qo'shildi!", reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
+    await message.answer(f"✅ **{message.text}** ro'yxatga qo'shildi!", reply_markup=main_menu(), parse_mode="Markdown")
     await state.clear()
 
 @dp.message(F.text == "👥 Mijozlarim")
 async def list_clients(message: types.Message):
-    user_id = message.from_user.id
     conn = sqlite3.connect('debts.db')
     c = conn.cursor()
-    c.execute("SELECT id, name, balance FROM clients WHERE owner_id=?", (user_id,))
+    c.execute("SELECT id, name, balance FROM clients WHERE owner_id=?", (message.from_user.id,))
     clients = c.fetchall()
     conn.close()
     
@@ -107,22 +96,8 @@ async def list_clients(message: types.Message):
         await message.answer("📭 Hozircha mijozlar yo'q.")
         return
     
-    buttons = [[InlineKeyboardButton(text=f"{cl[1]} | {format_num(cl[2])} so'm", callback_data=f"view_{cl[0]}")] for cl in clients]
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("📋 **Mijozlaringiz ro'yxati:**", reply_markup=kb, parse_mode="Markdown")
-
-@dp.callback_query(F.data == "back_to_list")
-async def back_to_list_handler(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    conn = sqlite3.connect('debts.db')
-    c = conn.cursor()
-    c.execute("SELECT id, name, balance FROM clients WHERE owner_id=?", (user_id,))
-    clients = c.fetchall()
-    conn.close()
-    
-    buttons = [[InlineKeyboardButton(text=f"{cl[1]} | {format_num(cl[2])} so'm", callback_data=f"view_{cl[0]}")] for cl in clients]
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text("📋 **Mijozlaringiz ro'yxati:**", reply_markup=kb, parse_mode="Markdown")
+    buttons = [[InlineKeyboardButton(text=f"👤 {cl[1]} | {format_num(cl[2])} so'm", callback_data=f"view_{cl[0]}")] for cl in clients]
+    await message.answer("📋 **Mijozlaringiz va qarzlar:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("view_"))
 async def view_client(callback: types.CallbackQuery):
@@ -134,23 +109,31 @@ async def view_client(callback: types.CallbackQuery):
     conn.close()
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Sotuv (Qarz yozish)", callback_data=f"act_add_{c_id}")],
-        [InlineKeyboardButton(text="✅ To'lov (Qarz ayirish)", callback_data=f"act_sub_{c_id}")],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_list")]
+        [InlineKeyboardButton(text="➕ Qarz qo'shish", callback_data=f"act_add_{c_id}"),
+         InlineKeyboardButton(text="✅ To'lov olish", callback_data=f"act_sub_{c_id}")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_list")]
     ])
     await callback.message.edit_text(
-        f"👤 Mijoz: **{cl[0]}**\n💰 Joriy qarz: **{format_num(cl[1])}** so'm", 
-        reply_markup=kb, 
-        parse_mode="Markdown"
+        f"👤 Mijoz: **{cl[0]}**\n💰 Hozirgi qarz: `{format_num(cl[1])}` so'm", 
+        reply_markup=kb, parse_mode="Markdown"
     )
 
+@dp.callback_query(F.data == "back_list")
+async def back_list(callback: types.CallbackQuery):
+    # Ro'yxatni yangilash kodi
+    conn = sqlite3.connect('debts.db')
+    c = conn.cursor()
+    c.execute("SELECT id, name, balance FROM clients WHERE owner_id=?", (callback.from_user.id,))
+    clients = c.fetchall()
+    buttons = [[InlineKeyboardButton(text=f"{cl[1]} | {format_num(cl[2])} so'm", callback_data=f"view_{cl[0]}")] for cl in clients]
+    await callback.message.edit_text("📋 **Mijozlar ro'yxati:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+
 @dp.callback_query(F.data.startswith("act_"))
-async def act_handler(callback: types.CallbackQuery, state: FSMContext):
+async def action(callback: types.CallbackQuery, state: FSMContext):
     _, mode, c_id = callback.data.split("_")
     await state.update_data(c_id=c_id, mode=mode)
-    
-    text = "💰 **Qancha qarz yozamiz?**" if mode == 'add' else "💰 **Qancha to'lov qabul qildingiz?**"
-    await callback.message.answer(f"{text}\n\n_Masalan: 500 000 yoki 100$_", parse_mode="Markdown")
+    txt = "➕ **Summani kiriting (Qarz qo'shish):**" if mode == 'add' else "✅ **To'lov summasini kiriting:**"
+    await callback.message.answer(txt, parse_mode="Markdown")
     await state.set_state(Form.amount_input)
 
 @dp.message(Form.amount_input)
@@ -159,55 +142,51 @@ async def process_amount(message: types.Message, state: FSMContext):
     amt = parse_num(message.text)
     
     if amt <= 0:
-        await message.answer("❌ Xato! Iltimos, to'g'ri summa kiriting (faqat raqamlar).")
+        await message.answer("⚠️ Iltimos, faqat musbat son kiriting!")
         return
 
     mode = data['mode']
     db_amt = amt if mode == 'add' else -amt
     
-    now_dt_obj = get_uzb_time()
-    now_dt = now_dt_obj.strftime("%d.%m.%Y %H:%M")
-    now_date = now_dt_obj.strftime("%Y-%m-%d")
-
     conn = sqlite3.connect('debts.db')
     c = conn.cursor()
-    
-    c.execute("UPDATE clients SET balance = balance + ?, last_update = ? WHERE id = ?", (db_amt, now_date, data['c_id']))
-    c.execute("INSERT INTO transactions (client_id, amount, type, date) VALUES (?, ?, ?, ?)", (data['c_id'], db_amt, mode, now_dt))
-    
+    c.execute("UPDATE clients SET balance = balance + ?, last_update = ? WHERE id = ?", 
+              (db_amt, get_uzb_time().strftime("%Y-%m-%d"), data['c_id']))
     c.execute("SELECT name, balance FROM clients WHERE id = ?", (data['c_id'],))
     client_name, new_balance = c.fetchone()
     conn.commit()
     conn.close()
     
-    chek = (
-        f"✅ **AMALIYOT BAJARILDI**\n\n"
-        f"👤 Mijoz: **{client_name}**\n"
-        f"💰 Miqdor: **{format_num(amt)}** so'm\n"
-        f"📝 Turi: {'Qarz yozildi ➕' if mode == 'add' else 'To`lov olindi ✅'}\n"
-        f"📅 Sana: {now_dt}\n"
-        f"----------------------------\n"
-        f"📉 **Yangi qoldiq: {format_num(new_balance)} so'm**"
+    # --- IDEAL CHEK FORMATI ---
+    type_str = "➕ Qarz yozildi" if mode == 'add' else "✅ To'lov qilindi"
+    color_emoji = "🔴" if mode == 'add' else "🟢"
+    
+    response = (
+        f"📝 **AMALIYOT TASDIQLANDI**\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👤 **Mijoz:** {client_name}\n"
+        f"💰 **Summa:** {format_num(amt)} so'm\n"
+        f"🔄 **Turi:** {type_str}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"{color_emoji} **Yangi balans:** `{format_num(new_balance)}` so'm\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📅 {get_uzb_time().strftime('%d.%m.%Y | %H:%M')}"
     )
     
-    await message.answer(chek, reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
+    await message.answer(response, reply_markup=main_menu(), parse_mode="Markdown")
     await state.clear()
 
 @dp.message(F.text == "📊 Statistika")
-async def statistics(message: types.Message):
+async def stats(message: types.Message):
     conn = sqlite3.connect('debts.db')
     c = conn.cursor()
     c.execute("SELECT SUM(balance) FROM clients WHERE owner_id=?", (message.from_user.id,))
     total = c.fetchone()[0] or 0
     conn.close()
-    await message.answer(f"📊 **Umumiy Statistika**\n\n💰 Jami kutilayotgan haq: \n👉 **{format_num(total)}** so'm", parse_mode="Markdown")
+    await message.answer(f"📊 **Umumiy kutilayotgan haq:**\n\n💰 `{format_num(total)}` so'm", parse_mode="Markdown")
 
 async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot to'xtatildi")
+    asyncio.run(main())
