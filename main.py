@@ -171,9 +171,13 @@ async def my_stats(message: types.Message):
 
 async def main():
     try:
-        # Bot tokenini tekshirish
+        # Railway-da eski konteyner yopilishi uchun 5 soniya kutamiz
+        await asyncio.sleep(5) 
+        
         bot_info = await bot.get_me()
-        print(f"Bot ishga tushdi: @{bot_info.username}")
+        print(f"Bot muvaffaqiyatli ishga tushdi: @{bot_info.username}")
+        
+        # Eskilarni tozalab tashlaymiz
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     except Exception as e:
