@@ -4,6 +4,7 @@ from datetime import datetime
 import asyncpg
 
 from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -39,21 +40,21 @@ async def init_db():
 
 def main_menu():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("➕ Mijoz qo'shish")
-    kb.add("👥 Mijozlar")
-    kb.add("📊 Statistika")
+    kb.add(KeyboardButton(text="➕ Mijoz qo'shish"))
+    kb.add(KeyboardButton(text="👥 Mijozlar"))
+    kb.add(KeyboardButton(text="📊 Statistika"))
     return kb
 
 def client_menu():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("➕ Qarz qo'shish")
-    kb.add("➖ Qarz ayirish")
-    kb.add("💰 Umumiy qarz")
-    kb.add("📜 Tarix")
-    kb.add("⬅️ Orqaga")
+    kb.add(KeyboardButton(text="➕ Qarz qo'shish"))
+    kb.add(KeyboardButton(text="➖ Qarz ayirish"))
+    kb.add(KeyboardButton(text="💰 Umumiy qarz"))
+    kb.add(KeyboardButton(text="📜 Tarix"))
+    kb.add(KeyboardButton(text="⬅️ Orqaga"))
     return kb
 
-@dp.message(commands=["start"])
+@dp.message(Command("start"))
 async def start(message: types.Message):
     await message.answer("Qarz CRM botga xush kelibsiz", reply_markup=main_menu())
 
@@ -65,7 +66,6 @@ async def add_client(message: types.Message):
 @dp.message(lambda m: user_states.get(m.from_user.id) == "add_client")
 async def save_client(message: types.Message):
     await db.execute("INSERT INTO clients(name) VALUES($1)", message.text)
-
     user_states.pop(message.from_user.id)
     await message.answer("Mijoz qo'shildi", reply_markup=main_menu())
 
@@ -77,9 +77,9 @@ async def clients(message: types.Message):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
 
     for r in rows:
-        kb.add(r["name"])
+        kb.add(KeyboardButton(text=r["name"]))
 
-    kb.add("⬅️ Orqaga")
+    kb.add(KeyboardButton(text="⬅️ Orqaga"))
 
     await message.answer("Mijozlar", reply_markup=kb)
 
