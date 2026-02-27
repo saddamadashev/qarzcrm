@@ -1,0 +1,26 @@
+import os
+import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
+
+def admin_only(func):
+    async def wrapper(message: types.Message):
+        if message.from_user.id != ADMIN_ID:
+            return
+        return await func(message)
+    return wrapper
+
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    await message.answer("Qarz CRM Bot ishga tushdi 🚀")
+
+async def main():
+    await dp.start_polling(bot)
+
+asyncio.run(main())
