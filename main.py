@@ -9,8 +9,8 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 # --- SOZLAMALAR ---
-TOKEN = os.getenv("BOT_TOKEN", "7968516598:AAHRE5zJ19D0_755S3y_6-uGjW5fT0E89_M")
-ADMIN_ID = 12345678  # O'zingizning ID-ingizni yozing
+TOKEN = os.getenv("BOT_TOKEN", "8759158410:AAFH4Lz-1VsndTC4VRABU7uHYU-qCFoY60Q")
+ADMIN_ID = 565876427  # O'zingizning ID-ingizni yozing
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
