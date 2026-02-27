@@ -208,5 +208,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-Shu kodni update qilib raqamlarni qo’shib emas alohida joy tashlab masalan 5000000 emas 5 000 000 qilib yozadigan va summa qo’shadigan joyga son raqam va $ belgisi yoziladigan qilib tayyorlab ber
