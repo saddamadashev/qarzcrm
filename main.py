@@ -2,6 +2,12 @@ import asyncio
 import sqlite3
 import os
 from datetime import datetime, timedelta
+
+def get_uzb_time():
+    # Railway serveri (UTC 0) va O'zbekiston (UTC +5) farqini to'g'rilaymiz
+    uzb_now = datetime.utcnow() + timedelta(hours=5)
+    return uzb_now
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -117,26 +123,51 @@ async def act(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.amount_input)
 
 @dp.message(Form.amount_input)
+@dp.message(Form.amount_input)
 async def process_amount(message: types.Message, state: FSMContext):
     data = await state.get_data()
     try:
-        # Probellarni olib tashlab hisoblash
         amt = parse_num(message.text)
         if data['mode'] == 'sub': amt = -amt
         
-        now_dt = datetime.now().strftime("%Y-%m-%d %H:%M")
-        now_date = datetime.now().strftime("%Y-%m-%d")
-        
+        # --- VAQTNI OLISH QISMI SHU YERDA ---
+        now_dt_obj = get_uzb_time() # O'zbekiston vaqti
+        now_dt = now_dt_obj.strftime("%d.%m.%Y %H:%M") # To'liq vaqt (Chek uchun)
+        now_date = now_dt_obj.strftime("%Y-%m-%d")    # Faqat sana (Baza uchun)
+        # -----------------------------------
+
         conn = sqlite3.connect('debts.db')
         c = conn.cursor()
-        c.execute("UPDATE clients SET balance = balance + ?, last_update = ? WHERE id = ?", (amt, now_date, data['c_id']))
-        c.execute("INSERT INTO transactions (client_id, amount, type, date) VALUES (?, ?, ?, ?)", (data['c_id'], amt, data['mode'], now_dt))
+        
+        # Bazani yangilash
+        c.execute("UPDATE clients SET balance = balance + ?, last_update = ? WHERE id = ?", 
+                  (amt, now_date, data['c_id']))
+        c.execute("INSERT INTO transactions (client_id, amount, type, date) VALUES (?, ?, ?, ?)", 
+                  (data['c_id'], amt, data['mode'], now_dt))
+        
+        # Yangi balansni bilish uchun qayta so'raymiz
+        c.execute("SELECT name, balance FROM clients WHERE id = ?", (data['c_id'],))
+        client_name, new_balance = c.fetchone()
+        
         conn.commit()
         conn.close()
         
-        await message.answer(f"✅ Bajarildi!\nSumma: {format_num(abs(amt))} so'm", reply_markup=main_menu(message.from_user.id))
+        # CHROYLI CHEK FORMATI
+        chek = (
+            f"📝 **AMALIYOT TASDIQLANDI**\n\n"
+            f"👤 Mijoz: **{client_name}**\n"
+            f"📅 Vaqt: {now_dt}\n"
+            f"💰 Miqdor: {format_num(abs(amt))} so'm\n"
+            f"{'➕ Sotuv (Qarz yozildi)' if amt > 0 else '✅ To`lov (Qarz ayirildi)'}\n"
+            f"--- --- --- ---\n"
+            f"📉 **Joriy qarz: {format_num(new_balance)} so'm**"
+        )
+        
+        await message.answer(chek, reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
+        
     except ValueError:
-        await message.answer("❌ Xato! Faqat raqam kiriting (masalan: 5 000 000).")
+        await message.answer("❌ Xato! Faqat raqam kiriting.")
+    
     await state.clear()
 
 @dp.message(F.text == "📊 Statistika")
