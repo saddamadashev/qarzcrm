@@ -222,6 +222,39 @@ async def process_op(message: types.Message):
 
 @dp.message(F.text == "💰 Balans")
 async def check_balance(message: types.Message):
+    @dp.message(F.text == "📜 Tarix")
+async def show_history(message: types.Message):
+    pool = await get_db_pool()
+
+    async with pool.acquire() as db:
+
+        c_id = await db.fetchval(
+            "SELECT current_client_id FROM bot_users WHERE user_id=$1",
+            message.from_user.id
+        )
+
+        rows = await db.fetch("""
+            SELECT amount, op_type, created_at
+            FROM operations
+            WHERE client_id=$1
+            ORDER BY created_at DESC
+            LIMIT 20
+        """, c_id)
+
+    if not rows:
+        return await message.answer("📭 Tarix yo‘q.")
+
+    text = "📜 So‘nggi operatsiyalar:\n\n"
+
+    for r in rows:
+
+        sign = "➕" if r["op_type"] == "plus" else "➖"
+
+        date = r["created_at"].strftime("%d.%m.%Y %H:%M")
+
+        text += f"{date} {sign} {format_num(r['amount'])}\n"
+
+    await message.answer(text)
     pool = await get_db_pool()
 
     async with pool.acquire() as db:
@@ -258,6 +291,41 @@ async def back(message: types.Message):
 
 @dp.message()
 async def select_client(message: types.Message):
+@dp.message(F.text == "📊 Umumiy hisobot")
+async def global_stats(message: types.Message):
+
+    pool = await get_db_pool()
+
+    async with pool.acquire() as db:
+
+        total_clients = await db.fetchval(
+            "SELECT COUNT(*) FROM clients WHERE owner_id=$1",
+            message.from_user.id
+        )
+
+        plus = await db.fetchval("""
+            SELECT COALESCE(SUM(amount),0)
+            FROM operations
+            WHERE op_type='plus'
+        """)
+
+        minus = await db.fetchval("""
+            SELECT COALESCE(SUM(amount),0)
+            FROM operations
+            WHERE op_type='minus'
+        """)
+
+    text = f"""
+📊 UMUMIY HISOBOT
+
+👥 Mijozlar: {total_clients}
+➕ Qarzlar: {format_num(plus)} so'm
+➖ To'lovlar: {format_num(minus)} so'm
+💰 Qoldiq: {format_num(plus-minus)} so'm
+"""
+
+    await message.answer(text)
+    
     pool = await get_db_pool()
 
     async with pool.acquire() as db:
