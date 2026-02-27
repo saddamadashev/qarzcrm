@@ -156,7 +156,12 @@ async def save_debt(message: types.Message):
 @dp.message(lambda m: state.get(m.from_user.id) == "minus_debt")
 async def save_minus(message: types.Message):
 
-    amount = float(message.text)
+    try:
+        amount = float(message.text)
+    except:
+        await message.answer("Faqat son yozing")
+        return
+
     client_id = current_client.get(message.from_user.id)
 
     await db.execute(
@@ -168,24 +173,33 @@ async def save_minus(message: types.Message):
 
     state.pop(message.from_user.id)
 
-    await message.answer("Qarz kamaytirildi")
+    await message.answer("To'lov yozildi")
 
-@dp.message(lambda m: m.text == "💰 Umumiy qarz")
-async def total(message: types.Message):
+@dp.message(lambda m: m.text == "📜 Tarix")
+async def history(message: types.Message):
 
     client_id = current_client.get(message.from_user.id)
 
-    add = await db.fetchval(
-        "SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='add'",
+    rows = await db.fetch(
+        "SELECT * FROM debts WHERE client_id=$1 ORDER BY created DESC LIMIT 20",
         client_id
     )
 
-    minus = await db.fetchval(
-        "SELECT COALESCE(SUM(amount),0) FROM debts WHERE client_id=$1 AND type='minus'",
-        client_id
-    )
+    if not rows:
+        await message.answer("Tarix yo'q")
+        return
 
-    await message.answer(f"Umumiy qarz: {add-minus}")
+    text = "So'nggi operatsiyalar:\n\n"
+
+    for r in rows:
+
+        sign = "➕" if r["type"] == "add" else "➖"
+
+        date = r["created"].strftime("%d.%m.%Y %H:%M")
+
+        text += f"{date} {sign} {r['amount']}\n"
+
+    await message.answer(text)
 
 @dp.message(lambda m: m.text == "📜 Tarix")
 async def history(message: types.Message):
