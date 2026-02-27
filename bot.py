@@ -10,8 +10,12 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 async def main():
+    print("Bot starting...")
+    
     await init_db()
     register_handlers(dp)
+    
+    print("Bot started successfully")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
