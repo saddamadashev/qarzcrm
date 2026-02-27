@@ -17,7 +17,10 @@ from aiogram.types import (
 # Logging sozlamalari
 logging.basicConfig(level=logging.INFO)
 
-# To'g'ri yozilish shakli:
+# Xato shakli (sizdagi):
+# TOKEN = 8759158410:AAGe6x_czTvux5QZSSuauZXdwF5QaBJhYEY
+
+# To'g'ri shakli:
 TOKEN = "8759158410:AAFH4Lz-1VsndTC4VRABU7uHYU-qCFoY60Q"
 ADMIN_ID = 565876427  # O'zingizni ID raqamingizni yozing
 
