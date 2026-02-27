@@ -1,20 +1,21 @@
 import os
 import asyncpg
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
-from aiogram import F
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 import asyncio
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 db = None
 
-# DATABASE ULANISH
+
 async def connect_db():
     global db
     db = await asyncpg.connect(DATABASE_URL)
@@ -22,127 +23,182 @@ async def connect_db():
     await db.execute("""
     CREATE TABLE IF NOT EXISTS clients(
         id SERIAL PRIMARY KEY,
-        name TEXT UNIQUE,
-        debt FLOAT DEFAULT 0
+        name TEXT,
+        debt FLOAT
     )
     """)
 
-# START
+
+menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ Mijoz qo'shish")],
+        [KeyboardButton(text="💰 Qarzni qo'shish")],
+        [KeyboardButton(text="➖ Qarzni ayirish")],
+        [KeyboardButton(text="📋 Qarzdorlar")],
+        [KeyboardButton(text="📊 Hisobot")]
+    ],
+    resize_keyboard=True
+)
+
+
 @dp.message(Command("start"))
-async def start(message: Message):
+async def start(message: types.Message):
+
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("Siz admin emassiz")
+        return
+
     await message.answer(
-        "📒 Qarz daftar bot\n\n"
-        "Buyruqlar:\n"
-        "/add Ism Summa\n"
-        "/pay Ism Summa\n"
-        "/list\n"
-        "/check Ism\n"
-        "/help"
+        "Qarz daftar botga xush kelibsiz",
+        reply_markup=menu
     )
 
-# HELP
-@dp.message(Command("help"))
-async def help_cmd(message: Message):
-    await message.answer(
-        "📌 Buyruqlar:\n\n"
-        "/add Ali 50000 → qarz qo'shish\n"
-        "/pay Ali 20000 → qarz kamaytirish\n"
-        "/check Ali → qarz ko'rish\n"
-        "/list → barcha qarzdorlar\n"
-    )
 
-# QARZ QO'SHISH
-@dp.message(Command("add"))
-async def add_debt(message: Message):
+# MIJOZ QO'SHISH
 
-    try:
-        _, name, amount = message.text.split()
-        amount = float(amount)
-    except:
-        await message.answer("❌ Format:\n/add Ali 50000")
-        return
+@dp.message(lambda m: m.text == "➕ Mijoz qo'shish")
+async def add_client(message: types.Message):
 
-    client = await db.fetchrow(
-        "SELECT * FROM clients WHERE name=$1", name)
+    await message.answer("Mijoz ismini yozing")
 
-    if client:
-        await db.execute(
-            "UPDATE clients SET debt=debt+$1 WHERE name=$2",
-            amount, name)
-    else:
-        await db.execute(
-            "INSERT INTO clients(name,debt) VALUES($1,$2)",
-            name, amount)
+    dp.message.register(save_client)
 
-    await message.answer(f"✅ {name} ga {amount} qo'shildi")
 
-# QARZ KAMAYTIRISH
-@dp.message(Command("pay"))
-async def pay_debt(message: Message):
+async def save_client(message: types.Message):
 
-    try:
-        _, name, amount = message.text.split()
-        amount = float(amount)
-    except:
-        await message.answer("❌ Format:\n/pay Ali 20000")
-        return
-
-    client = await db.fetchrow(
-        "SELECT * FROM clients WHERE name=$1", name)
-
-    if not client:
-        await message.answer("❌ Mijoz topilmadi")
-        return
+    name = message.text
 
     await db.execute(
-        "UPDATE clients SET debt=debt-$1 WHERE name=$2",
-        amount, name)
-
-    await message.answer(f"💰 {name} {amount} to'ladi")
-
-# BITTA MIJOZ
-@dp.message(Command("check"))
-async def check_debt(message: Message):
-
-    try:
-        _, name = message.text.split()
-    except:
-        await message.answer("❌ Format:\n/check Ali")
-        return
-
-    client = await db.fetchrow(
-        "SELECT * FROM clients WHERE name=$1", name)
-
-    if not client:
-        await message.answer("❌ Mijoz topilmadi")
-        return
-
-    await message.answer(
-        f"👤 {name}\n"
-        f"💰 Qarz: {client['debt']}"
+        "INSERT INTO clients(name,debt) VALUES($1,$2)",
+        name,
+        0
     )
 
-# BARCHA QARZLAR
-@dp.message(Command("list"))
-async def list_clients(message: Message):
+    await message.answer("Mijoz qo'shildi", reply_markup=menu)
+
+    dp.message.unregister(save_client)
+
+
+# QARZ QO'SHISH
+
+@dp.message(lambda m: m.text == "💰 Qarzni qo'shish")
+async def add_debt(message: types.Message):
 
     clients = await db.fetch("SELECT * FROM clients")
 
-    if not clients:
-        await message.answer("📭 Qarzdor yo'q")
-        return
-
-    text = "📊 Qarzdorlar:\n\n"
+    text = "Mijoz tanlang:\n"
 
     for c in clients:
-        text += f"👤 {c['name']} — {c['debt']}\n"
+        text += f"{c['id']} - {c['name']}\n"
 
     await message.answer(text)
 
-# BOT ISHGA TUSHISH
+    dp.message.register(debt_client)
+
+
+async def debt_client(message: types.Message):
+
+    global selected_client
+
+    selected_client = int(message.text)
+
+    await message.answer("Summani yozing")
+
+    dp.message.register(save_debt)
+
+
+async def save_debt(message: types.Message):
+
+    amount = float(message.text)
+
+    await db.execute(
+        "UPDATE clients SET debt = debt + $1 WHERE id=$2",
+        amount,
+        selected_client
+    )
+
+    await message.answer("Qarz qo'shildi", reply_markup=menu)
+
+    dp.message.unregister(save_debt)
+
+
+# QARZ AYIRISH
+
+@dp.message(lambda m: m.text == "➖ Qarzni ayirish")
+async def minus_debt(message: types.Message):
+
+    clients = await db.fetch("SELECT * FROM clients")
+
+    text = "Mijoz tanlang:\n"
+
+    for c in clients:
+        text += f"{c['id']} - {c['name']}\n"
+
+    await message.answer(text)
+
+    dp.message.register(minus_client)
+
+
+async def minus_client(message: types.Message):
+
+    global selected_client
+
+    selected_client = int(message.text)
+
+    await message.answer("To'langan summa")
+
+    dp.message.register(save_minus)
+
+
+async def save_minus(message: types.Message):
+
+    amount = float(message.text)
+
+    await db.execute(
+        "UPDATE clients SET debt = debt - $1 WHERE id=$2",
+        amount,
+        selected_client
+    )
+
+    await message.answer("Qarz kamaytirildi", reply_markup=menu)
+
+    dp.message.unregister(save_minus)
+
+
+# QARZDORLAR
+
+@dp.message(lambda m: m.text == "📋 Qarzdorlar")
+async def debtors(message: types.Message):
+
+    clients = await db.fetch("SELECT * FROM clients")
+
+    text = "Qarzdorlar:\n\n"
+
+    for c in clients:
+        text += f"{c['name']} - {c['debt']}\n"
+
+    await message.answer(text)
+
+
+# HISOBOT
+
+@dp.message(lambda m: m.text == "📊 Hisobot")
+async def report(message: types.Message):
+
+    total = await db.fetchval("SELECT SUM(debt) FROM clients")
+
+    if total is None:
+        total = 0
+
+    await message.answer(f"Umumiy qarz: {total}")
+
+
 async def main():
+
     await connect_db()
+
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
