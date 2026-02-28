@@ -103,6 +103,58 @@ async def show_stats(call: types.CallbackQuery):
 async def new_features(call: types.CallbackQuery):
     await call.answer("Tez kunda: Excel hisobot, Telegram orqali xabarnoma yuborish va h.k.", show_alert=True)
 
+@dp.callback_query(F.data == "list_cust")
+async def list_customers(call: types.CallbackQuery):
+    async with aiosqlite.connect("finance_pro.db") as db:
+        cursor = await db.execute(
+            "SELECT name, balance FROM customers WHERE owner_id=?",
+            (call.from_user.id,)
+        )
+        rows = await cursor.fetchall()
+
+    if not rows:
+        text = "📭 Sizda hali mijozlar yo‘q."
+    else:
+        text = "👥 Mijozlar ro‘yxati:\n\n"
+        for name, balance in rows:
+            text += f"{name} — {format_money(balance)}\n"
+
+    await call.message.edit_text(text, reply_markup=main_menu(call.from_user.id))
+
+
+@dp.callback_query(F.data == "reminders")
+async def reminders(call: types.CallbackQuery):
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    async with aiosqlite.connect("finance_pro.db") as db:
+        cursor = await db.execute(
+            "SELECT name, balance, deadline FROM customers WHERE owner_id=? AND deadline<=?",
+            (call.from_user.id, today)
+        )
+        rows = await cursor.fetchall()
+
+    if not rows:
+        text = "✅ Muddati kelgan qarzlar yo‘q."
+    else:
+        text = "🔔 Muddati kelganlar:\n\n"
+        for name, balance, deadline in rows:
+            text += f"{name} — {format_money(balance)} (Deadline: {deadline})\n"
+
+    await call.message.edit_text(text, reply_markup=main_menu(call.from_user.id))
+
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel(call: types.CallbackQuery):
+    if call.from_user.id != SUPER_ADMIN_ID:
+        await call.answer("Siz admin emassiz!", show_alert=True)
+        return
+
+    async with aiosqlite.connect("finance_pro.db") as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        total_users = await cursor.fetchone()
+
+    text = f"⚙️ ADMIN PANEL\n\n👤 Foydalanuvchilar soni: {total_users[0]}"
+    await call.message.edit_text(text, reply_markup=main_menu(call.from_user.id))
+    
 # --- ISHGA TUSHIRISH ---
 async def main():
     await init_db()
