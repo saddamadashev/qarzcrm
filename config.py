@@ -1,5 +1,2 @@
-import os
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
-OWNER_ID = int(os.getenv("OWNER_ID"))
+TOKEN = "8601271912:AAFou-qstt5iuagWP-p72edFTDgN6r3xg2c"
+SUPER_ADMIN_ID = 565876427
