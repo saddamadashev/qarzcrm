@@ -15,7 +15,7 @@ from sqlalchemy import Column, Integer, String, BigInteger, ForeignKey, DateTime
 
 BOT_TOKEN = os.getenv("8601271912:AAFou-qstt5iuagWP-p72edFTDgN6r3xg2c")
 DATABASE_URL = os.getenv("postgresql://postgres:jpDjoyaxHiyQwdmvkVDicKJGSPZZJYkT@maglev.proxy.rlwy.net:34068/railway")
-OWNER_ID = int(os.getenv("OWNER_ID"))
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # ================= DATABASE =================
 
