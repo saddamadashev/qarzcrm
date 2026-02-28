@@ -75,11 +75,11 @@ class DebtState(StatesGroup):
 
 async def init_db():
     async with engine.begin() as conn:
-        # ⚠️ VAQTINCHA: eski table'larni o‘chiradi
-        await conn.run_sync(Base.metadata.drop_all)
-        # Yangi strukturani yaratadi
+        # ⚠️ barcha table'larni kuch bilan o‘chiradi
+        await conn.execute("DROP SCHEMA public CASCADE;")
+        await conn.execute("CREATE SCHEMA public;")
         await conn.run_sync(Base.metadata.create_all)
-
+        
 async def get_or_create_user(tg_user):
     async with SessionLocal() as session:
         result = await session.execute(
