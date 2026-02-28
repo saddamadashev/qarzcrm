@@ -3,177 +3,343 @@ import sqlite3
 import asyncio
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# --- KONFIGURATSIYA ---
 TOKEN = "8759158410:AAFjHdOY5R95WlC0GG4n5dG7koRTPvv68jE"
-ADMIN_ID = 565876427  # O'zingizning Telegram ID raqamingizni yozing
+ADMIN_ID = 565876427
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=TOKEN)
+
+bot = Bot(TOKEN)
 dp = Dispatcher()
 
-# --- FSM HOLATLARI ---
-class DebtStates(StatesGroup):
-    waiting_for_client_name = State()
-    waiting_for_amount_add = State()
-    waiting_for_amount_sub = State()
 
-# --- MA'LUMOTLAR BAZASI ---
-def db_query(query, params=(), fetch=False):
-    conn = sqlite3.connect('qarz_daftari.db')
-    cursor = conn.cursor()
-    cursor.execute(query, params)
-    res = cursor.fetchall() if fetch else None
+# ----------- MONEY FORMAT -----------
+def money(x):
+    return f"{x:,.0f}".replace(",", " ")
+
+
+# ----------- DATABASE -----------
+def db(q, p=(), fetch=False):
+    conn = sqlite3.connect("debt.db")
+    cur = conn.cursor()
+    cur.execute(q, p)
+    r = cur.fetchall() if fetch else None
     conn.commit()
     conn.close()
-    return res
+    return r
 
-def init_db():
-    db_query('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
-    db_query('''CREATE TABLE IF NOT EXISTS clients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                owner_id INTEGER, 
-                name TEXT, 
-                total_debt REAL DEFAULT 0)''')
-    db_query('''CREATE TABLE IF NOT EXISTS history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                client_id INTEGER, 
-                amount REAL, 
-                type TEXT, 
-                date TEXT)''')
 
-init_db()
+def init():
+    db("""CREATE TABLE IF NOT EXISTS users(
+    id INTEGER PRIMARY KEY)""")
 
-# --- TUGMALAR ---
-def get_main_kb(user_id):
+    db("""CREATE TABLE IF NOT EXISTS clients(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner INTEGER,
+    name TEXT,
+    debt REAL DEFAULT 0)""")
+
+    db("""CREATE TABLE IF NOT EXISTS history(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id INTEGER,
+    amount REAL,
+    type TEXT,
+    date TEXT)""")
+
+
+init()
+
+
+# ----------- STATES -----------
+class S(StatesGroup):
+    client = State()
+    amount = State()
+    search = State()
+
+
+# ----------- KEYBOARD -----------
+def main_kb(id):
     kb = [
-        [KeyboardButton(text="👤 Mijozlarim"), KeyboardButton(text="➕ Mijoz qo'shish")],
-        [KeyboardButton(text="📊 Umumiy hisobot")]
+        [KeyboardButton(text="👤 Mijozlar"), KeyboardButton(text="➕ Mijoz qo'shish")],
+        [KeyboardButton(text="🔎 Qidirish"), KeyboardButton(text="📊 Hisobot")]
     ]
-    if user_id == ADMIN_ID:
-        kb.append([KeyboardButton(text="⚙️ Admin Paneli")])
+
+    if id == ADMIN_ID:
+        kb.append([KeyboardButton(text="⚙️ Admin")])
+
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- ASOSIY KOMANDALAR ---
+
+# ----------- START -----------
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    db_query("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_id,))
-    await message.answer(f"Salom {message.from_user.first_name}! Bu sizning shaxsiy qarz daftaringiz.", 
-                         reply_markup=get_main_kb(message.from_id))
+async def start(m: types.Message):
 
-# --- MIJOZ QO'SHISH ---
+    db("INSERT OR IGNORE INTO users VALUES(?)", (m.from_user.id,))
+
+    await m.answer(
+        "📒 Professional Qarzdor Botga xush kelibsiz",
+        reply_markup=main_kb(m.from_user.id)
+    )
+
+
+# ----------- ADD CLIENT -----------
 @dp.message(F.text == "➕ Mijoz qo'shish")
-async def add_client(message: types.Message, state: FSMContext):
-    await message.answer("Yangi mijoz ismini kiriting:", reply_markup=types.ReplyKeyboardRemove())
-    await state.set_state(DebtStates.waiting_for_client_name)
+async def add_client(m: types.Message, s: FSMContext):
 
-@dp.message(DebtStates.waiting_for_client_name)
-async def process_client_name(message: types.Message, state: FSMContext):
-    db_query("INSERT INTO clients (owner_id, name) VALUES (?, ?)", (message.from_id, message.text))
-    await state.clear()
-    await message.answer(f"✅ {message.text} muvaffaqiyatli qo'shildi!", reply_markup=get_main_kb(message.from_id))
+    await m.answer("Mijoz ismini yuboring")
 
-# --- MIJOZLAR RO'YXATI ---
-@dp.message(F.text == "👤 Mijozlarim")
-async def list_clients(message: types.Message):
-    clients = db_query("SELECT id, name, total_debt FROM clients WHERE owner_id = ?", (message.from_id,), True)
-    if not clients:
-        return await message.answer("Hali mijozlar yo'q.")
-    
-    builder = InlineKeyboardBuilder()
-    for c_id, name, debt in clients:
-        builder.row(InlineKeyboardButton(text=f"{name} | {debt} so'm", callback_data=f"view_{c_id}"))
-    await message.answer("Mijozni tanlang:", reply_markup=builder.as_markup())
+    await s.set_state(S.client)
 
-# --- MIJOZ USTIDA AMALLAR ---
-@dp.callback_query(F.data.startswith("view_"))
-async def view_client(callback: types.CallbackQuery, state: FSMContext):
-    client_id = callback.data.split("_")[1]
-    client = db_query("SELECT name, total_debt FROM clients WHERE id = ?", (client_id,), True)[0]
-    
-    await state.update_data(c_id=client_id, c_name=client[0])
-    
-    text = f"👤 **Mijoz:** {client[0]}\n💰 **Jami qarz:** {client[1]} so'm"
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="➕ Qarz qo'shish", callback_data=f"add_{client_id}"),
-                InlineKeyboardButton(text="➖ Qarz ayirish", callback_data=f"sub_{client_id}"))
-    builder.row(InlineKeyboardButton(text="📜 Tarix", callback_data=f"hist_{client_id}"),
-                InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"del_{client_id}"))
-    builder.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_to_list"))
-    
-    await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
-# --- QARZ QO'SHISH/AYIRISH ---
-@dp.callback_query(F.data.startswith(("add_", "sub_")))
-async def change_debt(callback: types.CallbackQuery, state: FSMContext):
-    action, c_id = callback.data.split("_")
-    await state.update_data(c_id=c_id, action=action)
-    await callback.message.answer(f"Summani kiriting (Faqat raqam):")
-    await state.set_state(DebtStates.waiting_for_amount_add if action == "add" else DebtStates.waiting_for_amount_sub)
+@dp.message(S.client)
+async def save_client(m: types.Message, s: FSMContext):
 
-@dp.message(DebtStates.waiting_for_amount_add)
-@dp.message(DebtStates.waiting_for_amount_sub)
-async def process_amount(message: types.Message, state: FSMContext):
+    db(
+        "INSERT INTO clients(owner,name) VALUES(?,?)",
+        (m.from_user.id, m.text)
+    )
+
+    await s.clear()
+
+    await m.answer("✅ Mijoz qo'shildi", reply_markup=main_kb(m.from_user.id))
+
+
+# ----------- CLIENT LIST -----------
+@dp.message(F.text == "👤 Mijozlar")
+async def clients(m: types.Message):
+
+    rows = db(
+        "SELECT id,name,debt FROM clients WHERE owner=?",
+        (m.from_user.id,),
+        True
+    )
+
+    if not rows:
+        return await m.answer("Mijoz yo'q")
+
+    kb = InlineKeyboardBuilder()
+
+    for i in rows:
+
+        kb.row(
+            InlineKeyboardButton(
+                text=f"{i[1]} | {money(i[2])}",
+                callback_data=f"client_{i[0]}"
+            )
+        )
+
+    await m.answer("Mijozni tanlang", reply_markup=kb.as_markup())
+
+
+# ----------- CLIENT VIEW -----------
+@dp.callback_query(F.data.startswith("client_"))
+async def view(c: types.CallbackQuery, s: FSMContext):
+
+    cid = c.data.split("_")[1]
+
+    client = db(
+        "SELECT name,debt FROM clients WHERE id=?",
+        (cid,),
+        True
+    )[0]
+
+    await s.update_data(cid=cid)
+
+    kb = InlineKeyboardBuilder()
+
+    kb.row(
+        InlineKeyboardButton(text="➕ Qarz", callback_data="add"),
+        InlineKeyboardButton(text="➖ To'lov", callback_data="sub")
+    )
+
+    kb.row(
+        InlineKeyboardButton(text="📜 Tarix", callback_data="history"),
+        InlineKeyboardButton(text="🗑 O'chirish", callback_data="del")
+    )
+
+    text = f"""
+👤 {client[0]}
+
+💰 Qarz: {money(client[1])} so'm
+"""
+
+    await c.message.edit_text(text, reply_markup=kb.as_markup())
+
+
+# ----------- ADD / SUB -----------
+@dp.callback_query(F.data.in_(["add", "sub"]))
+async def change(c: types.CallbackQuery, s: FSMContext):
+
+    await s.update_data(action=c.data)
+
+    await c.message.answer("Summani yuboring")
+
+    await s.set_state(S.amount)
+
+
+@dp.message(S.amount)
+async def amount(m: types.Message, s: FSMContext):
+
     try:
-        amount = float(message.text)
-    except ValueError:
-        return await message.answer("⚠️ Iltimos, faqat raqam kiriting:")
-    
-    data = await state.get_data()
-    c_id, action = data['c_id'], data['action']
-    now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    
-    status_text = "Qo'shildi" if action == "add" else "To'landi"
-    sign = "➕" if action == "add" else "➖"
-    
-    if action == "add":
-        db_query("UPDATE clients SET total_debt = total_debt + ? WHERE id = ?", (amount, c_id))
+        a = float(m.text)
+    except:
+        return await m.answer("Raqam yuboring")
+
+    d = await s.get_data()
+
+    cid = d["cid"]
+    act = d["action"]
+
+    if act == "add":
+        db("UPDATE clients SET debt=debt+? WHERE id=?", (a, cid))
+        typ = "Qarz"
     else:
-        db_query("UPDATE clients SET total_debt = total_debt - ? WHERE id = ?", (amount, c_id))
-    
-    db_query("INSERT INTO history (client_id, amount, type, date) VALUES (?, ?, ?, ?)", (c_id, amount, sign, now))
-    res = db_query("SELECT name, total_debt FROM clients WHERE id = ?", (c_id,), True)[0]
-    
-    receipt = (f"🧾 **AMALAYOT TASDIQLANDI**\n"
-               f"━━━━━━━━━━━━━━\n"
-               f"👤 Mijoz: {res[0]}\n"
-               f"💰 Miqdor: {amount} so'm\n"
-               f"📝 Holat: {status_text}\n"
-               f"📅 Sana: {now}\n"
-               f"━━━━━━━━━━━━━━\n"
-               f"💳 Jami qarz: {res[1]} so'm")
-    
-    await state.clear()
-    await message.answer(receipt, reply_markup=get_main_kb(message.from_id), parse_mode="Markdown")
+        db("UPDATE clients SET debt=debt-? WHERE id=?", (a, cid))
+        typ = "To'lov"
 
-# --- O'CHIRISH VA ORQAGA ---
-@dp.callback_query(F.data.startswith("del_"))
-async def delete_client(callback: types.CallbackQuery):
-    c_id = callback.data.split("_")[1]
-    db_query("DELETE FROM clients WHERE id = ?", (c_id,))
-    db_query("DELETE FROM history WHERE client_id = ?", (c_id,))
-    await callback.answer("Mijoz o'chirildi")
-    await list_clients(callback.message)
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-@dp.callback_query(F.data == "back_to_list")
-async def back_to_list(callback: types.CallbackQuery):
-    await list_clients(callback.message)
+    db(
+        "INSERT INTO history(client_id,amount,type,date) VALUES(?,?,?,?)",
+        (cid, a, typ, now)
+    )
 
-# --- ADMIN PANEL ---
-@dp.message(F.text == "⚙️ Admin Paneli")
-async def admin_main(message: types.Message):
-    if message.from_id != ADMIN_ID: return
-    users_count = db_query("SELECT COUNT(*) FROM users", fetch=True)[0][0]
-    total_debts = db_query("SELECT SUM(total_debt) FROM clients", fetch=True)[0][0] or 0
-    await message.answer(f"👑 **ADMIN PANEL**\n\n👥 Umumiy foydalanuvchilar: {users_count}\n💸 Tizimdagi jami qarzlar: {total_debts} so'm", parse_mode="Markdown")
+    res = db("SELECT name,debt FROM clients WHERE id=?", (cid,), True)[0]
+
+    txt = f"""
+🧾 Chek
+
+👤 {res[0]}
+
+💰 {money(a)} so'm
+📝 {typ}
+📅 {now}
+
+💳 Qoldiq: {money(res[1])}
+"""
+
+    await s.clear()
+
+    await m.answer(txt, reply_markup=main_kb(m.from_user.id))
+
+
+# ----------- HISTORY -----------
+@dp.callback_query(F.data == "history")
+async def history(c: types.CallbackQuery, s: FSMContext):
+
+    d = await s.get_data()
+
+    rows = db(
+        "SELECT amount,type,date FROM history WHERE client_id=? ORDER BY id DESC LIMIT 10",
+        (d["cid"],),
+        True
+    )
+
+    text = "📜 Oxirgi 10 amal\n\n"
+
+    for r in rows:
+        text += f"{r[1]} | {money(r[0])} | {r[2]}\n"
+
+    await c.message.answer(text)
+
+
+# ----------- DELETE CLIENT -----------
+@dp.callback_query(F.data == "del")
+async def delete(c: types.CallbackQuery, s: FSMContext):
+
+    d = await s.get_data()
+
+    db("DELETE FROM clients WHERE id=?", (d["cid"],))
+
+    await c.message.answer("🗑 Mijoz o'chirildi")
+
+
+# ----------- SEARCH -----------
+@dp.message(F.text == "🔎 Qidirish")
+async def search(m: types.Message, s: FSMContext):
+
+    await m.answer("Ism yozing")
+
+    await s.set_state(S.search)
+
+
+@dp.message(S.search)
+async def find(m: types.Message, s: FSMContext):
+
+    rows = db(
+        "SELECT name,debt FROM clients WHERE name LIKE ?",
+        (f"%{m.text}%",),
+        True
+    )
+
+    if not rows:
+        return await m.answer("Topilmadi")
+
+    t = ""
+
+    for r in rows:
+        t += f"{r[0]} | {money(r[1])}\n"
+
+    await s.clear()
+
+    await m.answer(t)
+
+
+# ----------- REPORT -----------
+@dp.message(F.text == "📊 Hisobot")
+async def report(m: types.Message):
+
+    total = db(
+        "SELECT SUM(debt) FROM clients WHERE owner=?",
+        (m.from_user.id,),
+        True
+    )[0][0] or 0
+
+    clients = db(
+        "SELECT COUNT(*) FROM clients WHERE owner=?",
+        (m.from_user.id,),
+        True
+    )[0][0]
+
+    await m.answer(
+        f"""
+📊 Hisobot
+
+👥 Mijozlar: {clients}
+💰 Jami qarz: {money(total)} so'm
+"""
+    )
+
+
+# ----------- ADMIN -----------
+@dp.message(F.text == "⚙️ Admin")
+async def admin(m: types.Message):
+
+    if m.from_user.id != ADMIN_ID:
+        return
+
+    users = db("SELECT COUNT(*) FROM users", fetch=True)[0][0]
+
+    debts = db("SELECT SUM(debt) FROM clients", fetch=True)[0][0] or 0
+
+    await m.answer(
+        f"""
+👑 ADMIN
+
+👥 Foydalanuvchilar: {users}
+💰 Tizim qarzi: {money(debts)}
+"""
+    )
+
 
 async def main():
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
