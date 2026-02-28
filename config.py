@@ -1,0 +1,4 @@
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SUPER_ADMIN_ID = 565876427
