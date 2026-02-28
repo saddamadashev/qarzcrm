@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeybo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- KONFIGURATSIYA ---
-TOKEN = "8759158410:AAHW5i4zPX8HkRl5qSJafGaBx-N0Nc9r_5w"
+TOKEN = "8759158410:AAFjHdOY5R95WlC0GG4n5dG7koRTPvv68jE"
 ADMIN_ID = 565876427  # O'zingizning Telegram ID raqamingizni yozing
 
 logging.basicConfig(level=logging.INFO)
