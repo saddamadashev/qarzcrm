@@ -95,14 +95,14 @@ async def start_handler(message: types.Message):
 
 # ================= WEBHOOK =================
 
-@app.on_event("startup")
-async def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await init_db()
     await bot.set_webhook(WEBHOOK_URL)
-
-@app.on_event("shutdown")
-async def on_shutdown():
+    yield
     await bot.delete_webhook()
+
+app = FastAPI(lifespan=lifespan)
 
 @app.post(WEBHOOK_PATH)
 async def webhook(request: Request):
