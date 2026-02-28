@@ -1,6 +1,16 @@
 import os
 import asyncio
 from datetime import datetime
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    await bot.set_webhook(WEBHOOK_URL)
+    yield
+    await bot.delete_webhook()
+
+app = FastAPI(lifespan=lifespan)
 
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher
