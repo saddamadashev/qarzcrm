@@ -2,6 +2,7 @@ import os
 import asyncio
 from datetime import datetime
 from sqlalchemy import text
+from sqlalchemy import case
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
