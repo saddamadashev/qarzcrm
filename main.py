@@ -1,6 +1,7 @@
 import os
 import asyncio
 from datetime import datetime
+from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
@@ -12,7 +13,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
 from aiogram.filters import Command
