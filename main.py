@@ -1,184 +1,113 @@
-import os
 import asyncio
-from datetime import datetime
-
+import logging
+from datetime import datetime, timedelta
+import aiosqlite
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.filters import CommandStart
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, Integer, String, BigInteger, ForeignKey, DateTime, select, func, case
+# --- SOZLAMALAR ---
+TOKEN = "SIZNING_BOT_TOKENINGIZ"
+SUPER_ADMIN_ID = 12345678  # O'zingizning ID raqamingiz
 
-# ================= CONFIG =================
+logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+# --- HOLATLAR (FSM) ---
+class DebtFlow(StatesGroup):
+    choosing_customer = State()
+    entering_amount = State()
+    setting_deadline = State()
 
-DATABASE_URL = os.getenv("DATABASE_URL").replace(
-    "postgresql://", "postgresql+asyncpg://"
-)
-
-# ================= DATABASE =================
-
-engine = create_async_engine(DATABASE_URL, echo=False)
-SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-Base = declarative_base()
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    telegram_id = Column(BigInteger, unique=True)
-
-class Client(Base):
-    __tablename__ = "clients"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    full_name = Column(String)
-
-class Transaction(Base):
-    __tablename__ = "transactions"
-    id = Column(Integer, primary_key=True)
-    client_id = Column(Integer, ForeignKey("clients.id"))
-    amount = Column(Integer)
-    type = Column(String)  # add / minus
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-# ================= BOT =================
-
-bot = Bot(BOT_TOKEN)
-dp = Dispatcher()
-state = {}
-
-# ================= INIT =================
-
+# --- BAZA BILAN ISHLASH ---
 async def init_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    async with aiosqlite.connect("finance_pro.db") as db:
+        # Foydalanuvchilar (Do'kon egalari)
+        await db.execute("""CREATE TABLE IF NOT EXISTS users 
+            (user_id INTEGER PRIMARY KEY, joined_at TEXT)""")
+        # Mijozlar
+        await db.execute("""CREATE TABLE IF NOT EXISTS customers 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER, name TEXT, 
+             balance REAL DEFAULT 0, deadline TEXT)""")
+        # Tranzaksiyalar (Tarix va Chek uchun)
+        await db.execute("""CREATE TABLE IF NOT EXISTS history 
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, cust_id INTEGER, amount REAL, 
+             type TEXT, timestamp TEXT)""")
+        await db.commit()
 
-async def get_user(tg_id):
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.telegram_id == tg_id)
-        )
-        user = result.scalar_one_or_none()
+# --- QULAYLIKLAR (Chek va Formatlash) ---
+def format_money(amount):
+    return f"{amount:,.0f}".replace(",", " ") + " so'm"
 
-        if not user:
-            user = User(telegram_id=tg_id)
-            session.add(user)
-            await session.commit()
-
-        return user
-
-async def calculate_total(client_id):
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(
-                func.sum(
-                    case(
-                        (Transaction.type == "add", Transaction.amount),
-                        else_=-Transaction.amount
-                    )
-                )
-            ).where(Transaction.client_id == client_id)
-        )
-        total = result.scalar()
-        return total or 0
-
-# ================= KEYBOARD =================
-
-def main_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Mijoz qo‘shish")],
-            [KeyboardButton(text="📋 Mijozlar")],
-        ],
-        resize_keyboard=True
+def create_receipt(c_name, amount, t_type, new_balance):
+    now = datetime.now().strftime("%d.%m.%Y | %H:%M")
+    sign = "➕" if t_type == "PLUS" else "➖"
+    return (
+        f"🧾 **TO'LOV CHEKI**\n"
+        f"----------------------------\n"
+        f"👤 Mijoz: {c_name}\n"
+        f"🕒 Sana: {now}\n"
+        f"💰 Amaliyot: {sign} {format_money(amount)}\n"
+        f"----------------------------\n"
+        f"📉 Umumiy qarz: {format_money(new_balance)}\n"
+        f"✅ Muvaffaqiyatli bajarildi."
     )
 
-# ================= HANDLERS =================
+# --- ASOSIY MENYU ---
+def main_menu(user_id):
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="👥 Mijozlar", callback_data="list_cust"))
+    builder.row(types.InlineKeyboardButton(text="📊 Statistika", callback_data="stats"))
+    builder.row(types.InlineKeyboardButton(text="🔔 Muddati kelganlar", callback_data="reminders"))
+    if user_id == SUPER_ADMIN_ID:
+        builder.row(types.InlineKeyboardButton(text="⚙️ Admin Paneli", callback_data="admin_panel"))
+    # Yangi funksiyalar uchun joy (Kelajakda bitta tugma bilan qo'shish uchun)
+    builder.row(types.InlineKeyboardButton(text="🚀 Yangi xizmatlar", callback_data="new_features"))
+    return builder.as_markup()
 
-@dp.message(Command("start"))
-async def start_handler(message: types.Message):
-    await get_user(message.from_user.id)
-    await message.answer("Qarz CRM PRO ishga tushdi ✅", reply_markup=main_kb())
+# --- HANDLERLAR ---
+dp = Dispatcher()
 
-@dp.message(F.text == "➕ Mijoz qo‘shish")
-async def add_client_start(message: types.Message):
-    state[message.from_user.id] = "waiting_client"
-    await message.answer("Mijoz ismini yuboring:")
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    async with aiosqlite.connect("finance_pro.db") as db:
+        await db.execute("INSERT OR IGNORE INTO users VALUES (?, ?)", 
+                         (message.from_user.id, datetime.now().isoformat()))
+        await db.commit()
+    await message.answer("🏦 **Qarz Boshqaruv Tizimi**\nKerakli bo'limni tanlang:", 
+                         reply_markup=main_menu(message.from_user.id))
 
-@dp.message(F.text == "📋 Mijozlar")
-async def list_clients(message: types.Message):
-    async with SessionLocal() as session:
-        user = await get_user(message.from_user.id)
-        result = await session.execute(
-            select(Client).where(Client.user_id == user.id)
-        )
-        clients = result.scalars().all()
+# Statistika Funksiyasi
+@dp.callback_query(F.data == "stats")
+async def show_stats(call: types.CallbackQuery):
+    async with aiosqlite.connect("finance_pro.db") as db:
+        # Eng ko'p qarz
+        cursor = await db.execute("SELECT name, balance FROM customers WHERE owner_id=? ORDER BY balance DESC LIMIT 1", (call.from_user.id,))
+        top_debtor = await cursor.fetchone()
+        
+        # Jami aylanma
+        cursor = await db.execute("SELECT SUM(balance) FROM customers WHERE owner_id=?", (call.from_user.id,))
+        total = await cursor.fetchone()
 
-    if not clients:
-        await message.answer("Mijozlar yo‘q.")
-        return
+    text = "📊 **SHAXSIY STATISTIKA**\n\n"
+    if top_debtor:
+        text += f"🔺 Eng ko'p qarz: {top_debtor[0]} ({format_money(top_debtor[1])})\n"
+    text += f"💰 Umumiy qarzlar yig'indisi: {format_money(total[0] or 0)}"
+    
+    await call.message.edit_text(text, reply_markup=main_menu(call.from_user.id))
 
-    text = "Mijozlar:\n"
-    for c in clients:
-        total = await calculate_total(c.id)
-        text += f"\nID: {c.id}\n{c.full_name}\nQarz: {total}\n"
+# Yangi funksiyalar (Zaxira joyi)
+@dp.callback_query(F.data == "new_features")
+async def new_features(call: types.CallbackQuery):
+    await call.answer("Tez kunda: Excel hisobot, Telegram orqali xabarnoma yuborish va h.k.", show_alert=True)
 
-    await message.answer(text)
-
-@dp.message()
-async def universal_handler(message: types.Message):
-    user_id = message.from_user.id
-
-    if state.get(user_id) == "waiting_client":
-        async with SessionLocal() as session:
-            user = await get_user(user_id)
-            client = Client(user_id=user.id, full_name=message.text)
-            session.add(client)
-            await session.commit()
-
-        state[user_id] = None
-        await message.answer("Mijoz qo‘shildi ✅", reply_markup=main_kb())
-        return
-
-    if message.text.startswith("+"):
-        try:
-            parts = message.text.split()
-            client_id = int(parts[1])
-            amount = int(parts[2])
-
-            async with SessionLocal() as session:
-                tr = Transaction(client_id=client_id, amount=amount, type="add")
-                session.add(tr)
-                await session.commit()
-
-            total = await calculate_total(client_id)
-            await message.answer(f"Qo‘shildi ✅\nYangi umumiy qarz: {total}")
-        except:
-            await message.answer("Format: + ID SUMMA")
-
-    if message.text.startswith("-"):
-        try:
-            parts = message.text.split()
-            client_id = int(parts[1])
-            amount = int(parts[2])
-
-            async with SessionLocal() as session:
-                tr = Transaction(client_id=client_id, amount=amount, type="minus")
-                session.add(tr)
-                await session.commit()
-
-            total = await calculate_total(client_id)
-            await message.answer(f"Ayrildi ✅\nYangi umumiy qarz: {total}")
-        except:
-            await message.answer("Format: - ID SUMMA")
-
-# ================= MAIN =================
-
+# --- ISHGA TUSHIRISH ---
 async def main():
     await init_db()
+    bot = Bot(token=TOKEN)
+    print("Bot muvaffaqiyatli yoqildi!")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
