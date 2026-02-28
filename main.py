@@ -13,9 +13,18 @@ from sqlalchemy import Column, Integer, String, BigInteger, ForeignKey, DateTime
 
 # ================= CONFIG =================
 
-BOT_TOKEN = os.getenv("8601271912:AAFou-qstt5iuagWP-p72edFTDgN6r3xg2c")
-DATABASE_URL = os.getenv("postgresql://postgres:jpDjoyaxHiyQwdmvkVDicKJGSPZZJYkT@maglev.proxy.rlwy.net:34068/railway")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
+raw_db = os.getenv("DATABASE_URL")
+
+if not raw_db:
+    raise ValueError("DATABASE_URL topilmadi Railway Variablesda")
+
+DATABASE_URL = raw_db.replace(
+    "postgresql://",
+    "postgresql+asyncpg://"
+)
 
 # ================= DATABASE =================
 
