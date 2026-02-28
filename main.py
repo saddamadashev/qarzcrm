@@ -9,7 +9,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 # --- SOZLAMALAR ---
-TOKEN = "8601271912:AAFCJxtKMwaT-BuGoQ1CymRGp6Vdb08Nfck"
+import os
+TOKEN = os.getenv("BOT_TOKEN")
 SUPER_ADMIN_ID = 565876427
 
 logging.basicConfig(level=logging.INFO)
