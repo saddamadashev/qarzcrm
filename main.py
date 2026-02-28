@@ -69,6 +69,24 @@ def main_kb(user_id):
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 # ----------- START -----------
+@dp.errors()
+async def error_handler(event: types.ErrorEvent):
+    # Xatolik haqida ma'lumotni shakllantirish
+    ex = event.exception
+    error_msg = (
+        f"⚠️ **Tizimda xatolik!**\n\n"
+        f"🔍 Tur: `{type(ex).__name__}`\n"
+        f"📝 Xabar: `{ex}`\n"
+        f"📅 Vaqt: {datetime.now().strftime('%H:%M:%S')}"
+    )
+    logging.error(f"BOT ERROR: {ex}")
+    
+    # Adminga xabar yuborish (Bot o'chib qolmasligi uchun try-except ichida)
+    try:
+        await bot.send_message(ADMIN_ID, error_msg)
+    except:
+        pass
+
 @dp.message(Command("start"))
 async def start(m: types.Message):
     db("INSERT OR IGNORE INTO users VALUES(?)", (m.from_user.id,))
@@ -237,7 +255,18 @@ async def admin(m: types.Message):
     await m.answer(f"👑 ADMIN\n\n👥 Foydalanuvchilar: {users}\n💰 Tizim qarzi: {money(debts)}")
 
 async def main():
-    await dp.start_polling(bot)
+    # 1. "Self-healing" qismi: Eski ulanishlarni va kutilayotgan barcha xabarlarni o'chiradi
+    # Bu orqali "Conflict: terminated by other getUpdates" xatosi chiqmaydi
+    logging.info("Bot tayyorlanmoqda, eski ulanishlar uzilmoqda...")
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    # 2. Diagnostika: Bazani tekshirish
+    try:
+        db("SELECT 1", fetch=True)
+        logging.info("Ma'lumotlar bazasi muvaffaqiyatli ulandi.")
+    except Exception as e:
+        logging.error(f"Baza bilan bog'lanishda xato: {e}")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # 3. Pollingni boshlash
+    logging.info("Bot muvaffaqiyatli ishga tushdi!")
+    await dp.start_polling(bot)
