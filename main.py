@@ -119,30 +119,31 @@ async def change_debt(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(DebtStates.waiting_for_amount_add)
 @dp.message(DebtStates.waiting_for_amount_sub)
 async def process_amount(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        return await message.answer("Iltimos, faqat raqam kiriting!")
+    try:
+        amount = float(message.text)
+    except ValueError:
+        return await message.answer("⚠️ Iltimos, faqat raqam kiriting:")
     
     data = await state.get_data()
-    amount = float(message.text)
     c_id, action = data['c_id'], data['action']
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     
-    # Bazani yangilash
+    status_text = "Qo'shildi" if action == "add" else "To'landi"
+    sign = "➕" if action == "add" else "➖"
+    
     if action == "add":
         db_query("UPDATE clients SET total_debt = total_debt + ? WHERE id = ?", (amount, c_id))
-        db_query("INSERT INTO history (client_id, amount, type, date) VALUES (?, ?, '➕', ?)", (c_id, amount, now))
     else:
         db_query("UPDATE clients SET total_debt = total_debt - ? WHERE id = ?", (amount, c_id))
-        db_query("INSERT INTO history (client_id, amount, type, date) VALUES (?, ?, '➖', ?)", (c_id, amount, now))
     
+    db_query("INSERT INTO history (client_id, amount, type, date) VALUES (?, ?, ?, ?)", (c_id, amount, sign, now))
     res = db_query("SELECT name, total_debt FROM clients WHERE id = ?", (c_id,), True)[0]
     
-    # Chek chiqarish
     receipt = (f"🧾 **AMALAYOT TASDIQLANDI**\n"
                f"━━━━━━━━━━━━━━\n"
                f"👤 Mijoz: {res[0]}\n"
                f"💰 Miqdor: {amount} so'm\n"
-               f"📝 Holat: {'Qo\'shildi' if action == 'add' else 'To\'landi'}\n"
+               f"📝 Holat: {status_text}\n"
                f"📅 Sana: {now}\n"
                f"━━━━━━━━━━━━━━\n"
                f"💳 Jami qarz: {res[1]} so'm")
