@@ -1,22 +1,10 @@
 import os
 import asyncio
 from datetime import datetime
-from fastapi import FastAPI, Request
-from contextlib import asynccontextmanager
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await init_db()
-    await bot.set_webhook(WEBHOOK_URL)
-    yield
-    await bot.delete_webhook()
-
-app = FastAPI(lifespan=lifespan)
-
-from aiogram import Bot, Dispatcher
-from aiogram.types import Update
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram import types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
@@ -25,14 +13,11 @@ from sqlalchemy import Column, Integer, String, BigInteger, ForeignKey, DateTime
 # ================= CONFIG =================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-BASE_URL = os.getenv("BASE_URL")  # Railway public url
+OWNER_ID = int(os.getenv("OWNER_ID"))
 
-raw_db = os.getenv("DATABASE_URL")
-DATABASE_URL = raw_db.replace("postgresql://", "postgresql+asyncpg://")
-
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{BASE_URL}{WEBHOOK_PATH}"
+DATABASE_URL = os.getenv("DATABASE_URL").replace(
+    "postgresql://", "postgresql+asyncpg://"
+)
 
 # ================= DATABASE =================
 
@@ -44,32 +29,26 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     telegram_id = Column(BigInteger, unique=True)
-    full_name = Column(String)
-    role = Column(String, default="user")
-    plan = Column(String, default="free")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Client(Base):
     __tablename__ = "clients"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     full_name = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"))
     amount = Column(Integer)
-    type = Column(String)
-    comment = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    type = Column(String)  # add / minus
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 # ================= BOT =================
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-app = FastAPI()
+state = {}
 
 # ================= INIT =================
 
@@ -77,45 +56,130 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-async def get_or_create_user(tg_user):
+async def get_user(tg_id):
     async with SessionLocal() as session:
         result = await session.execute(
-            select(User).where(User.telegram_id == tg_user.id)
+            select(User).where(User.telegram_id == tg_id)
         )
         user = result.scalar_one_or_none()
 
         if not user:
-            role = "owner" if tg_user.id == OWNER_ID else "user"
-            user = User(
-                telegram_id=tg_user.id,
-                full_name=tg_user.full_name,
-                role=role
-            )
+            user = User(telegram_id=tg_id)
             session.add(user)
             await session.commit()
 
         return user
 
+async def calculate_total(client_id):
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                func.sum(
+                    case(
+                        (Transaction.type == "add", Transaction.amount),
+                        else_=-Transaction.amount
+                    )
+                )
+            ).where(Transaction.client_id == client_id)
+        )
+        total = result.scalar()
+        return total or 0
+
+# ================= KEYBOARD =================
+
+def main_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Mijoz qo‘shish")],
+            [KeyboardButton(text="📋 Mijozlar")],
+        ],
+        resize_keyboard=True
+    )
+
 # ================= HANDLERS =================
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    user = await get_or_create_user(message.from_user)
-    await message.answer("🚀 PRO SaaS Qarz CRM ishlayapti.")
+    await get_user(message.from_user.id)
+    await message.answer("Qarz CRM PRO ishga tushdi ✅", reply_markup=main_kb())
 
-# ================= WEBHOOK =================
+@dp.message(F.text == "➕ Mijoz qo‘shish")
+async def add_client_start(message: types.Message):
+    state[message.from_user.id] = "waiting_client"
+    await message.answer("Mijoz ismini yuboring:")
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+@dp.message(F.text == "📋 Mijozlar")
+async def list_clients(message: types.Message):
+    async with SessionLocal() as session:
+        user = await get_user(message.from_user.id)
+        result = await session.execute(
+            select(Client).where(Client.user_id == user.id)
+        )
+        clients = result.scalars().all()
+
+    if not clients:
+        await message.answer("Mijozlar yo‘q.")
+        return
+
+    text = "Mijozlar:\n"
+    for c in clients:
+        total = await calculate_total(c.id)
+        text += f"\nID: {c.id}\n{c.full_name}\nQarz: {total}\n"
+
+    await message.answer(text)
+
+@dp.message()
+async def universal_handler(message: types.Message):
+    user_id = message.from_user.id
+
+    if state.get(user_id) == "waiting_client":
+        async with SessionLocal() as session:
+            user = await get_user(user_id)
+            client = Client(user_id=user.id, full_name=message.text)
+            session.add(client)
+            await session.commit()
+
+        state[user_id] = None
+        await message.answer("Mijoz qo‘shildi ✅", reply_markup=main_kb())
+        return
+
+    if message.text.startswith("+"):
+        try:
+            parts = message.text.split()
+            client_id = int(parts[1])
+            amount = int(parts[2])
+
+            async with SessionLocal() as session:
+                tr = Transaction(client_id=client_id, amount=amount, type="add")
+                session.add(tr)
+                await session.commit()
+
+            total = await calculate_total(client_id)
+            await message.answer(f"Qo‘shildi ✅\nYangi umumiy qarz: {total}")
+        except:
+            await message.answer("Format: + ID SUMMA")
+
+    if message.text.startswith("-"):
+        try:
+            parts = message.text.split()
+            client_id = int(parts[1])
+            amount = int(parts[2])
+
+            async with SessionLocal() as session:
+                tr = Transaction(client_id=client_id, amount=amount, type="minus")
+                session.add(tr)
+                await session.commit()
+
+            total = await calculate_total(client_id)
+            await message.answer(f"Ayrildi ✅\nYangi umumiy qarz: {total}")
+        except:
+            await message.answer("Format: - ID SUMMA")
+
+# ================= MAIN =================
+
+async def main():
     await init_db()
-    await bot.set_webhook(WEBHOOK_URL)
-    yield
-    await bot.delete_webhook()
+    await dp.start_polling(bot)
 
-app = FastAPI(lifespan=lifespan)
-
-@app.post(WEBHOOK_PATH)
-async def webhook(request: Request):
-    update = Update.model_validate(await request.json())
-    await dp.feed_update(bot, update)
-    return {"ok": True}
+if __name__ == "__main__":
+    asyncio.run(main())
