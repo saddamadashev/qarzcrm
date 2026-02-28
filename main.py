@@ -12,7 +12,7 @@ from sqlalchemy import Column, Integer, String, BigInteger, ForeignKey, DateTime
 
 # ================= CONFIG =================
 
-BOT_TOKEN = os.getenv("8601271912:AAFou-qstt5iuagWP-p72edFTDgN6r3xg2c")
+BOT_TOKEN = os.getenv("BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 DATABASE_URL = os.getenv("DATABASE_URL").replace(
