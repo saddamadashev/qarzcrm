@@ -9,8 +9,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 # --- SOZLAMALAR ---
-TOKEN = "SIZNING_BOT_TOKENINGIZ"
-SUPER_ADMIN_ID = 12345678  # O'zingizning ID raqamingiz
+TOKEN = "8601271912:AAFou-qstt5iuagWP-p72edFTDgN6r3xg2c"
+SUPER_ADMIN_ID = 565876427
 
 logging.basicConfig(level=logging.INFO)
 
