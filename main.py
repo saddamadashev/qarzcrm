@@ -3,6 +3,15 @@ from telebot import types
 import sqlite3
 from datetime import datetime
 import time
+import os
+import psycopg2
+
+# Railway bergan ulanish manzilini olish
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+def get_connection():
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
+
 
 # --- SOZLAMALAR ---
 TOKEN = '8736208200:AAFge15TkEDq-VF8y77NUQcMc5HIpIK30g0'
