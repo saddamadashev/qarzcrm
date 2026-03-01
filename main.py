@@ -5,6 +5,16 @@ from datetime import datetime
 import time
 import os
 import psycopg2
+import psycopg2
+import os
+
+# Railway avtomatik beradigan ulanish manzili
+DB_URL = os.environ.get('DATABASE_URL')
+
+def get_db_connection():
+    # SSL rejimini 'require' qilish Railway uchun shart
+    conn = psycopg2.connect(DB_URL, sslmode='require')
+    return conn
 
 # Railway bergan ulanish manzilini olish
 DATABASE_URL = os.environ.get('DATABASE_URL')
