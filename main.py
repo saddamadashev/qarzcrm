@@ -24,7 +24,7 @@ def get_connection():
 
 
 # --- SOZLAMALAR ---
-TOKEN = '8736208200:AAFge15TkEDq-VF8y77NUQcMc5HIpIK30g0'
+TOKEN = '8736208200:AAG82T-nU8qN4eDjd2yzf3PL50r8Duxfpk8'
 bot = telebot.TeleBot(TOKEN)
 
 # Bazani ulash va yaratish
